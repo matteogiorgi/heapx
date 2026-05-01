@@ -1,11 +1,11 @@
 #include <stdlib.h>
 
 #include "heaps/binary_heap.h"
-#include "priority_queue_internal.h"
+#include "heap_internal.h"
 
 /**
  * @file binary_heap.c
- * @brief Binary min-heap backend for the abstract priority_queue API.
+ * @brief Binary min-heap backend for the abstract heapx_heap API.
  *
  * The backend stores backend-owned handles in a contiguous array. Parent
  * and child positions follow the usual zero-based binary heap layout:
@@ -22,14 +22,14 @@
  *
  * Ordering is defined entirely by the comparator stored in the embedded base
  * object. The base field must remain first so the object can be exposed as
- * struct priority_queue.
+ * struct heapx_heap.
  *
  * Invariant: for every occupied index except the root, the parent item has
  * priority less than or equal to the child item according to base.cmp().
  */
 struct binary_heap {
-    /** Common priority_queue base. Must be the first field. */
-    struct priority_queue base;
+    /** Common heapx_heap base. Must be the first field. */
+    struct heapx_heap base;
     /** Contiguous array of stored handles. */
     struct binary_heap_handle **data;
     /** Number of items currently stored. */
@@ -41,44 +41,44 @@ struct binary_heap {
 /** @brief Backend-specific handle for an item stored in a binary heap. */
 struct binary_heap_handle {
     /** Common public handle header. Must be the first field. */
-    struct priority_queue_handle base;
+    struct heapx_handle base;
     /** Current array position, updated whenever handles are swapped. */
     size_t index;
 };
 
-static void binary_heap_destroy(struct priority_queue *queue);
-static int binary_heap_push(struct priority_queue *queue, void *item);
-static struct priority_queue_handle *binary_heap_push_handle(
-    struct priority_queue *queue,
+static void binary_heap_destroy(struct heapx_heap *base);
+static int binary_heap_insert(struct heapx_heap *base, void *item);
+static struct heapx_handle *binary_heap_insert_handle(
+    struct heapx_heap *base,
     void *item
 );
 static int binary_heap_decrease_key(
-    struct priority_queue *queue,
-    struct priority_queue_handle *handle
+    struct heapx_heap *base,
+    struct heapx_handle *handle
 );
 static void *binary_heap_remove(
-    struct priority_queue *queue,
-    struct priority_queue_handle *handle
+    struct heapx_heap *base,
+    struct heapx_handle *handle
 );
 static int binary_heap_contains(
-    const struct priority_queue *queue,
+    const struct heapx_heap *base,
     const void *item
 );
-static void *binary_heap_peek(const struct priority_queue *queue);
-static void *binary_heap_pop(struct priority_queue *queue);
-static size_t binary_heap_size(const struct priority_queue *queue);
-static int binary_heap_empty(const struct priority_queue *queue);
+static void *binary_heap_peek_min(const struct heapx_heap *base);
+static void *binary_heap_extract_min(struct heapx_heap *base);
+static size_t binary_heap_size(const struct heapx_heap *base);
+static int binary_heap_empty(const struct heapx_heap *base);
 
-/** @brief Static vtable exposed through the common priority_queue base. */
-static const struct priority_queue_vtable binary_heap_vtable = {
+/** @brief Static vtable exposed through the common heapx_heap base. */
+static const struct heapx_vtable binary_heap_vtable = {
     binary_heap_destroy,
-    binary_heap_push,
-    binary_heap_push_handle,
+    binary_heap_insert,
+    binary_heap_insert_handle,
     binary_heap_decrease_key,
     binary_heap_remove,
     binary_heap_contains,
-    binary_heap_peek,
-    binary_heap_pop,
+    binary_heap_peek_min,
+    binary_heap_extract_min,
     binary_heap_size,
     binary_heap_empty
 };
@@ -86,25 +86,25 @@ static const struct priority_queue_vtable binary_heap_vtable = {
 /**
  * @brief Recover the concrete heap object from the abstract base pointer.
  *
- * This cast is valid because struct priority_queue is the first field of
+ * This cast is valid because struct heapx_heap is the first field of
  * struct binary_heap.
  */
-static struct binary_heap *binary_heap_from_queue(struct priority_queue *queue)
+static struct binary_heap *binary_heap_from_base(struct heapx_heap *base)
 {
-    return (struct binary_heap *)queue;
+    return (struct binary_heap *)base;
 }
 
-/** @brief Const-preserving variant of binary_heap_from_queue(). */
-static const struct binary_heap *binary_heap_from_const_queue(
-    const struct priority_queue *queue
+/** @brief Const-preserving variant of binary_heap_from_base(). */
+static const struct binary_heap *binary_heap_from_const_base(
+    const struct heapx_heap *base
 )
 {
-    return (const struct binary_heap *)queue;
+    return (const struct binary_heap *)base;
 }
 
 /** @brief Recover the binary-heap handle from the common handle pointer. */
 static struct binary_heap_handle *binary_heap_handle_from_handle(
-    struct priority_queue_handle *handle
+    struct heapx_handle *handle
 )
 {
     return (struct binary_heap_handle *)handle;
@@ -147,7 +147,7 @@ static void binary_heap_sift_up(struct binary_heap *heap, size_t index)
 /**
  * @brief Move an item away from the root until heap order is restored.
  *
- * Used after delete-min, when the last leaf has been moved into the root slot.
+ * Used after extract-min, when the last leaf has been moved into the root slot.
  */
 static void binary_heap_sift_down(struct binary_heap *heap, size_t index)
 {
@@ -190,7 +190,7 @@ static void binary_heap_sift_down(struct binary_heap *heap, size_t index)
  * Existing items remain valid and keep their relative array contents. Returns
  * 0 on success and -1 if allocation fails.
  *
- * The capacity grows geometrically through binary_heap_push(), keeping
+ * The capacity grows geometrically through binary_heap_insert(), keeping
  * repeated insertions amortized O(1) for resizing work.
  */
 static int binary_heap_reserve(struct binary_heap *heap, size_t capacity)
@@ -249,7 +249,7 @@ static void binary_heap_repair_at(struct binary_heap *heap, size_t index)
     binary_heap_sift_down(heap, index);
 }
 
-struct priority_queue *binary_heap_create(priority_queue_cmp_fn cmp)
+struct heapx_heap *binary_heap_create(heapx_cmp_fn cmp)
 {
     struct binary_heap *heap;
 
@@ -257,7 +257,7 @@ struct priority_queue *binary_heap_create(priority_queue_cmp_fn cmp)
     if (heap == NULL)
         return NULL;
 
-    priority_queue_init(&heap->base, &binary_heap_vtable, cmp);
+    heapx_heap_init(&heap->base, &binary_heap_vtable, cmp);
     heap->data = NULL;
     heap->size = 0;
     heap->capacity = 0;
@@ -270,9 +270,9 @@ struct priority_queue *binary_heap_create(priority_queue_cmp_fn cmp)
  *
  * Stored item pointers are caller-owned and are intentionally left untouched.
  */
-static void binary_heap_destroy(struct priority_queue *queue)
+static void binary_heap_destroy(struct heapx_heap *base)
 {
-    struct binary_heap *heap = binary_heap_from_queue(queue);
+    struct binary_heap *heap = binary_heap_from_base(base);
     size_t i;
 
     for (i = 0; i < heap->size; i++)
@@ -287,20 +287,20 @@ static void binary_heap_destroy(struct priority_queue *queue)
  * The item is first appended at the end of the occupied array and then moved
  * toward the root until the binary heap invariant holds again.
  */
-static int binary_heap_push(struct priority_queue *queue, void *item)
+static int binary_heap_insert(struct heapx_heap *base, void *item)
 {
-    return binary_heap_push_handle(queue, item) == NULL ? -1 : 0;
+    return binary_heap_insert_handle(base, item) == NULL ? -1 : 0;
 }
 
 /**
  * @brief Insert an item and return its handle.
  */
-static struct priority_queue_handle *binary_heap_push_handle(
-    struct priority_queue *queue,
+static struct heapx_handle *binary_heap_insert_handle(
+    struct heapx_heap *base,
     void *item
 )
 {
-    struct binary_heap *heap = binary_heap_from_queue(queue);
+    struct binary_heap *heap = binary_heap_from_base(base);
     struct binary_heap_handle *handle;
     size_t new_capacity;
 
@@ -320,7 +320,7 @@ static struct priority_queue_handle *binary_heap_push_handle(
         }
     }
 
-    priority_queue_handle_init(&handle->base, queue, item);
+    heapx_handle_init(&handle->base, base, item);
     handle->index = heap->size;
     heap->data[heap->size] = handle;
     binary_heap_sift_up(heap, heap->size);
@@ -333,11 +333,11 @@ static struct priority_queue_handle *binary_heap_push_handle(
  * @brief Repair an item whose key decreased and priority improved.
  */
 static int binary_heap_decrease_key(
-    struct priority_queue *queue,
-    struct priority_queue_handle *handle
+    struct heapx_heap *base,
+    struct heapx_handle *handle
 )
 {
-    struct binary_heap *heap = binary_heap_from_queue(queue);
+    struct binary_heap *heap = binary_heap_from_base(base);
     struct binary_heap_handle *binary_handle =
         binary_heap_handle_from_handle(handle);
 
@@ -349,17 +349,17 @@ static int binary_heap_decrease_key(
  * @brief Remove one item by handle.
  */
 static void *binary_heap_remove(
-    struct priority_queue *queue,
-    struct priority_queue_handle *handle
+    struct heapx_heap *base,
+    struct heapx_handle *handle
 )
 {
-    struct binary_heap *heap = binary_heap_from_queue(queue);
+    struct binary_heap *heap = binary_heap_from_base(base);
     struct binary_heap_handle *binary_handle =
         binary_heap_handle_from_handle(handle);
     size_t index = binary_handle->index;
     void *item = handle->item;
 
-    handle->queue = NULL;
+    handle->heap = NULL;
 
     heap->size--;
     if (index != heap->size) {
@@ -376,20 +376,20 @@ static void *binary_heap_remove(
  * @brief Return whether item is stored by pointer identity.
  */
 static int binary_heap_contains(
-    const struct priority_queue *queue,
+    const struct heapx_heap *base,
     const void *item
 )
 {
-    const struct binary_heap *heap = binary_heap_from_const_queue(queue);
+    const struct binary_heap *heap = binary_heap_from_const_base(base);
     size_t index;
 
     return binary_heap_find_index(heap, item, &index) == 0;
 }
 
 /** @brief Return the root item without modifying the heap. */
-static void *binary_heap_peek(const struct priority_queue *queue)
+static void *binary_heap_peek_min(const struct heapx_heap *base)
 {
-    const struct binary_heap *heap = binary_heap_from_const_queue(queue);
+    const struct binary_heap *heap = binary_heap_from_const_base(base);
 
     if (heap->size == 0)
         return NULL;
@@ -403,9 +403,9 @@ static void *binary_heap_peek(const struct priority_queue *queue)
  * The last occupied slot replaces the root, then binary_heap_sift_down()
  * repairs the only possible violation.
  */
-static void *binary_heap_pop(struct priority_queue *queue)
+static void *binary_heap_extract_min(struct heapx_heap *base)
 {
-    struct binary_heap *heap = binary_heap_from_queue(queue);
+    struct binary_heap *heap = binary_heap_from_base(base);
     struct binary_heap_handle *handle;
     void *item;
 
@@ -414,7 +414,7 @@ static void *binary_heap_pop(struct priority_queue *queue)
 
     handle = heap->data[0];
     item = handle->base.item;
-    handle->base.queue = NULL;
+    handle->base.heap = NULL;
     heap->size--;
 
     if (heap->size > 0) {
@@ -428,13 +428,13 @@ static void *binary_heap_pop(struct priority_queue *queue)
 }
 
 /** @brief Return the current number of stored items. */
-static size_t binary_heap_size(const struct priority_queue *queue)
+static size_t binary_heap_size(const struct heapx_heap *base)
 {
-    return binary_heap_from_const_queue(queue)->size;
+    return binary_heap_from_const_base(base)->size;
 }
 
 /** @brief Return whether the heap contains no items. */
-static int binary_heap_empty(const struct priority_queue *queue)
+static int binary_heap_empty(const struct heapx_heap *base)
 {
-    return binary_heap_size(queue) == 0;
+    return binary_heap_size(base) == 0;
 }

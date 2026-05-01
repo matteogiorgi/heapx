@@ -1,10 +1,10 @@
-PROJECT_NAME           = "hpqlib"
-PROJECT_BRIEF          = "C99 heap-priority-queue library"
+PROJECT_NAME           = "heapx"
+PROJECT_BRIEF          = "C99 heap library with a native heap API"
 OUTPUT_DIRECTORY       = build/docs
 
-INPUT                  = include/hpqlib/priority_queue.h \
-                         src/priority_queue_internal.h \
-                         src/priority_queue.c \
+INPUT                  = include/heapx/heap.h \
+                         src/heap_internal.h \
+                         src/heap.c \
                          src/heaps
 FILE_PATTERNS          = *.h *.c
 RECURSIVE              = YES

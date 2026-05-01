@@ -1,7 +1,7 @@
-#ifndef HPQLIB_HEAPS_FIBONACCI_HEAP_H
-#define HPQLIB_HEAPS_FIBONACCI_HEAP_H
+#ifndef HEAPX_HEAPS_FIBONACCI_HEAP_H
+#define HEAPX_HEAPS_FIBONACCI_HEAP_H
 
-#include "hpqlib/priority_queue.h"
+#include "heapx/heap.h"
 
 /**
  * @file fibonacci_heap.h
@@ -14,16 +14,16 @@
  */
 
 /**
- * @brief Create a priority_queue backed by a Fibonacci heap.
+ * @brief Create a heapx_heap backed by a Fibonacci heap.
  *
- * This is a private factory used by the public priority_queue_create()
+ * This is a private factory used by the public heapx_create()
  * dispatcher. The returned object must be handled only through the abstract
- * priority_queue API.
+ * heapx_heap API.
  *
  * @param cmp Comparator used to order stored items.
- * @return A new queue, or NULL if allocation fails.
+ * @return A new heap, or NULL if allocation fails.
  */
-struct priority_queue *fibonacci_heap_create(priority_queue_cmp_fn cmp);
+struct heapx_heap *fibonacci_heap_create(heapx_cmp_fn cmp);
 
 /** @} */
 

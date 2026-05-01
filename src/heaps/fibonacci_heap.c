@@ -1,14 +1,14 @@
 #include <stdlib.h>
 
 #include "heaps/fibonacci_heap.h"
-#include "priority_queue_internal.h"
+#include "heap_internal.h"
 
 /**
  * @file fibonacci_heap.c
- * @brief Fibonacci heap backend for the abstract priority_queue API.
+ * @brief Fibonacci heap backend for the abstract heapx_heap API.
  *
- * This backend implements the operations currently exposed by hpqlib:
- * create/destroy/push/decrease-key/remove/contains/peek/pop/size/empty. Its
+ * This backend implements the operations currently exposed by heapx:
+ * create/destroy/insert/decrease-key/remove/contains/peek_min/extract_min/size/empty. Its
  * handle-based targeted operations follow the paper's assumption that the item
  * position is known: decrease-key uses cut plus cascading cuts, and remove
  * promotes the deleted node's children before applying the same cascading-cut
@@ -27,7 +27,7 @@
  */
 struct fibonacci_heap_node {
     /** Common public handle header. Must be the first field. */
-    struct priority_queue_handle handle;
+    struct heapx_handle handle;
     /** Parent node, or NULL when the node is a root. */
     struct fibonacci_heap_node *parent;
     /** One child in the circular child list, or NULL. */
@@ -50,70 +50,70 @@ struct fibonacci_heap_node {
  * the circular root list. The root list may contain several heap-ordered trees.
  */
 struct fibonacci_heap {
-    /** Common priority_queue base. Must be the first field. */
-    struct priority_queue base;
+    /** Common heapx_heap base. Must be the first field. */
+    struct heapx_heap base;
     /** Current minimum root, or NULL when empty. */
     struct fibonacci_heap_node *minimum;
     /** Number of stored items. */
     size_t size;
 };
 
-static void fibonacci_heap_destroy(struct priority_queue *queue);
-static int fibonacci_heap_push(struct priority_queue *queue, void *item);
-static struct priority_queue_handle *fibonacci_heap_push_handle(
-    struct priority_queue *queue,
+static void fibonacci_heap_destroy(struct heapx_heap *base);
+static int fibonacci_heap_insert(struct heapx_heap *base, void *item);
+static struct heapx_handle *fibonacci_heap_insert_handle(
+    struct heapx_heap *base,
     void *item
 );
 static int fibonacci_heap_decrease_key(
-    struct priority_queue *queue,
-    struct priority_queue_handle *handle
+    struct heapx_heap *base,
+    struct heapx_handle *handle
 );
 static void *fibonacci_heap_remove(
-    struct priority_queue *queue,
-    struct priority_queue_handle *handle
+    struct heapx_heap *base,
+    struct heapx_handle *handle
 );
 static int fibonacci_heap_contains(
-    const struct priority_queue *queue,
+    const struct heapx_heap *base,
     const void *item
 );
-static void *fibonacci_heap_peek(const struct priority_queue *queue);
-static void *fibonacci_heap_pop(struct priority_queue *queue);
-static size_t fibonacci_heap_size(const struct priority_queue *queue);
-static int fibonacci_heap_empty(const struct priority_queue *queue);
+static void *fibonacci_heap_peek_min(const struct heapx_heap *base);
+static void *fibonacci_heap_extract_min(struct heapx_heap *base);
+static size_t fibonacci_heap_size(const struct heapx_heap *base);
+static int fibonacci_heap_empty(const struct heapx_heap *base);
 
-/** @brief Static vtable exposed through the common priority_queue base. */
-static const struct priority_queue_vtable fibonacci_heap_vtable = {
+/** @brief Static vtable exposed through the common heapx_heap base. */
+static const struct heapx_vtable fibonacci_heap_vtable = {
     fibonacci_heap_destroy,
-    fibonacci_heap_push,
-    fibonacci_heap_push_handle,
+    fibonacci_heap_insert,
+    fibonacci_heap_insert_handle,
     fibonacci_heap_decrease_key,
     fibonacci_heap_remove,
     fibonacci_heap_contains,
-    fibonacci_heap_peek,
-    fibonacci_heap_pop,
+    fibonacci_heap_peek_min,
+    fibonacci_heap_extract_min,
     fibonacci_heap_size,
     fibonacci_heap_empty
 };
 
 /** @brief Recover the concrete heap object from the abstract base pointer. */
-static struct fibonacci_heap *fibonacci_heap_from_queue(
-    struct priority_queue *queue
+static struct fibonacci_heap *fibonacci_heap_from_base(
+    struct heapx_heap *base
 )
 {
-    return (struct fibonacci_heap *)queue;
+    return (struct fibonacci_heap *)base;
 }
 
-/** @brief Const-preserving variant of fibonacci_heap_from_queue(). */
-static const struct fibonacci_heap *fibonacci_heap_from_const_queue(
-    const struct priority_queue *queue
+/** @brief Const-preserving variant of fibonacci_heap_from_base(). */
+static const struct fibonacci_heap *fibonacci_heap_from_const_base(
+    const struct heapx_heap *base
 )
 {
-    return (const struct fibonacci_heap *)queue;
+    return (const struct fibonacci_heap *)base;
 }
 
 /** @brief Recover a Fibonacci heap node from its public handle pointer. */
 static struct fibonacci_heap_node *fibonacci_heap_node_from_handle(
-    struct priority_queue_handle *handle
+    struct heapx_handle *handle
 )
 {
     return (struct fibonacci_heap_node *)handle;
@@ -128,7 +128,7 @@ static struct fibonacci_heap_node *fibonacci_heap_node_create(void *item)
     if (node == NULL)
         return NULL;
 
-    priority_queue_handle_init(&node->handle, NULL, item);
+    heapx_handle_init(&node->handle, NULL, item);
     node->parent = NULL;
     node->child = NULL;
     node->left = node;
@@ -169,7 +169,7 @@ static void fibonacci_heap_list_remove(struct fibonacci_heap_node *node)
  * @brief Add node to the root list and update the minimum pointer.
  *
  * The node is marked unowned by any parent. This is used both for fresh
- * insertions and when delete-min promotes children of the removed root.
+ * insertions and when extract-min promotes children of the removed root.
  */
 static void fibonacci_heap_add_root(
     struct fibonacci_heap *heap,
@@ -327,7 +327,7 @@ static void fibonacci_heap_update_minimum(struct fibonacci_heap *heap)
 /**
  * @brief Consolidate roots so no two roots have the same degree.
  *
- * delete-min promotes the removed minimum's children to the root list. This
+ * extract-min promotes the removed minimum's children to the root list. This
  * function links roots of equal degree until at most one root of each degree
  * remains, then rebuilds the root list and minimum pointer.
  *
@@ -482,7 +482,7 @@ static struct fibonacci_heap_node *fibonacci_heap_find_node(
     return NULL;
 }
 
-struct priority_queue *fibonacci_heap_create(priority_queue_cmp_fn cmp)
+struct heapx_heap *fibonacci_heap_create(heapx_cmp_fn cmp)
 {
     struct fibonacci_heap *heap;
 
@@ -490,7 +490,7 @@ struct priority_queue *fibonacci_heap_create(priority_queue_cmp_fn cmp)
     if (heap == NULL)
         return NULL;
 
-    priority_queue_init(&heap->base, &fibonacci_heap_vtable, cmp);
+    heapx_heap_init(&heap->base, &fibonacci_heap_vtable, cmp);
     heap->minimum = NULL;
     heap->size = 0;
 
@@ -498,9 +498,9 @@ struct priority_queue *fibonacci_heap_create(priority_queue_cmp_fn cmp)
 }
 
 /** @brief Release all Fibonacci-heap-owned nodes and the heap object. */
-static void fibonacci_heap_destroy(struct priority_queue *queue)
+static void fibonacci_heap_destroy(struct heapx_heap *base)
 {
-    struct fibonacci_heap *heap = fibonacci_heap_from_queue(queue);
+    struct fibonacci_heap *heap = fibonacci_heap_from_base(base);
 
     fibonacci_heap_destroy_nodes(heap->minimum);
     free(heap);
@@ -512,27 +512,27 @@ static void fibonacci_heap_destroy(struct priority_queue *queue)
  * Fibonacci heap insertion does not consolidate. It just links the new node
  * into the root list and updates the minimum pointer if necessary.
  */
-static int fibonacci_heap_push(struct priority_queue *queue, void *item)
+static int fibonacci_heap_insert(struct heapx_heap *base, void *item)
 {
-    return fibonacci_heap_push_handle(queue, item) == NULL ? -1 : 0;
+    return fibonacci_heap_insert_handle(base, item) == NULL ? -1 : 0;
 }
 
 /**
  * @brief Insert an item as a new singleton root and return its handle.
  */
-static struct priority_queue_handle *fibonacci_heap_push_handle(
-    struct priority_queue *queue,
+static struct heapx_handle *fibonacci_heap_insert_handle(
+    struct heapx_heap *base,
     void *item
 )
 {
-    struct fibonacci_heap *heap = fibonacci_heap_from_queue(queue);
+    struct fibonacci_heap *heap = fibonacci_heap_from_base(base);
     struct fibonacci_heap_node *node;
 
     node = fibonacci_heap_node_create(item);
     if (node == NULL)
         return NULL;
 
-    node->handle.queue = queue;
+    node->handle.heap = base;
     fibonacci_heap_add_root(heap, node);
     heap->size++;
 
@@ -546,11 +546,11 @@ static struct priority_queue_handle *fibonacci_heap_push_handle(
  * violating node, then cascade through ancestors that have already lost a child.
  */
 static int fibonacci_heap_decrease_key(
-    struct priority_queue *queue,
-    struct priority_queue_handle *handle
+    struct heapx_heap *base,
+    struct heapx_handle *handle
 )
 {
-    struct fibonacci_heap *heap = fibonacci_heap_from_queue(queue);
+    struct fibonacci_heap *heap = fibonacci_heap_from_base(base);
     struct fibonacci_heap_node *node =
         fibonacci_heap_node_from_handle(handle);
     struct fibonacci_heap_node *parent;
@@ -573,25 +573,25 @@ static int fibonacci_heap_decrease_key(
 /**
  * @brief Remove one item by the paper's delete operation.
  *
- * If the node is the current minimum, removal is delete-min. Otherwise its
+ * If the node is the current minimum, removal is extract-min. Otherwise its
  * children become roots, the node is cut from its parent or root list, and the
  * cascading-cut rule is applied to the parent that lost a child.
  */
 static void *fibonacci_heap_remove(
-    struct priority_queue *queue,
-    struct priority_queue_handle *handle
+    struct heapx_heap *base,
+    struct heapx_handle *handle
 )
 {
-    struct fibonacci_heap *heap = fibonacci_heap_from_queue(queue);
+    struct fibonacci_heap *heap = fibonacci_heap_from_base(base);
     struct fibonacci_heap_node *node =
         fibonacci_heap_node_from_handle(handle);
     struct fibonacci_heap_node *parent = node->parent;
     void *item = handle->item;
 
-    handle->queue = NULL;
+    handle->heap = NULL;
 
     if (node == heap->minimum) {
-        (void)fibonacci_heap_pop(queue);
+        (void)fibonacci_heap_extract_min(base);
         return item;
     }
 
@@ -613,21 +613,21 @@ static void *fibonacci_heap_remove(
  * @brief Return whether item is stored by pointer identity.
  */
 static int fibonacci_heap_contains(
-    const struct priority_queue *queue,
+    const struct heapx_heap *base,
     const void *item
 )
 {
     const struct fibonacci_heap *heap =
-        fibonacci_heap_from_const_queue(queue);
+        fibonacci_heap_from_const_base(base);
 
     return fibonacci_heap_find_node(heap->minimum, item) != NULL;
 }
 
 /** @brief Return the current minimum item without removing it. */
-static void *fibonacci_heap_peek(const struct priority_queue *queue)
+static void *fibonacci_heap_peek_min(const struct heapx_heap *base)
 {
     const struct fibonacci_heap *heap =
-        fibonacci_heap_from_const_queue(queue);
+        fibonacci_heap_from_const_base(base);
 
     if (heap->minimum == NULL)
         return NULL;
@@ -644,9 +644,9 @@ static void *fibonacci_heap_peek(const struct priority_queue *queue)
  * The returned item pointer is the caller-owned pointer stored in the removed
  * node. Only the node wrapper is freed.
  */
-static void *fibonacci_heap_pop(struct priority_queue *queue)
+static void *fibonacci_heap_extract_min(struct heapx_heap *base)
 {
-    struct fibonacci_heap *heap = fibonacci_heap_from_queue(queue);
+    struct fibonacci_heap *heap = fibonacci_heap_from_base(base);
     struct fibonacci_heap_node *minimum = heap->minimum;
     void *item;
     size_t child_count;
@@ -656,7 +656,7 @@ static void *fibonacci_heap_pop(struct priority_queue *queue)
         return NULL;
 
     item = minimum->handle.item;
-    minimum->handle.queue = NULL;
+    minimum->handle.heap = NULL;
 
     child_count = minimum->degree;
     for (i = 0; i < child_count; i++) {
@@ -682,13 +682,13 @@ static void *fibonacci_heap_pop(struct priority_queue *queue)
 }
 
 /** @brief Return the current number of stored items. */
-static size_t fibonacci_heap_size(const struct priority_queue *queue)
+static size_t fibonacci_heap_size(const struct heapx_heap *base)
 {
-    return fibonacci_heap_from_const_queue(queue)->size;
+    return fibonacci_heap_from_const_base(base)->size;
 }
 
 /** @brief Return whether the heap contains no items. */
-static int fibonacci_heap_empty(const struct priority_queue *queue)
+static int fibonacci_heap_empty(const struct heapx_heap *base)
 {
-    return fibonacci_heap_size(queue) == 0;
+    return fibonacci_heap_size(base) == 0;
 }

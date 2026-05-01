@@ -1,24 +1,24 @@
 #include <stdlib.h>
 
 #include "heaps/kaplan_heap.h"
-#include "priority_queue_internal.h"
+#include "heap_internal.h"
 
 /**
  * @file kaplan_heap.c
- * @brief Kaplan/simple-Fibonacci heap backend for priority_queue.
+ * @brief Kaplan/simple-Fibonacci heap backend for heapx_heap.
  *
- * Simple Fibonacci heap from "Fibonacci Heaps Revisited", exposed in hpqlib as
+ * Simple Fibonacci heap from "Fibonacci Heaps Revisited", exposed in heapx as
  * the Kaplan heap backend.
  *
  * Unlike the classic Fibonacci heap backend, this representation keeps a single
- * heap-ordered tree. Insertions use naive links against the root. delete-min
+ * heap-ordered tree. Insertions use naive links against the root. extract-min
  * removes the root, performs fair links among children with equal rank, then
  * folds the remaining roots back into one tree with naive links.
  *
  * decrease-key follows the paper's simple-Fibonacci-heap repair: one cut plus
  * cascading rank/state changes, not cascading cuts. remove uses the same
- * structural idea to simulate delete-by-handle as
- * decrease-key-to-minus-infinity followed by delete-min.
+ * structural idea to simulate removal by handle as
+ * decrease-key-to-minus-infinity followed by extract-min.
  */
 
 /**
@@ -26,14 +26,14 @@
  * @brief Node stored in the Kaplan heap tree.
  *
  * Children are maintained as a doubly linked list through before/after. The
- * rank is used by fair linking during delete-min consolidation.
+ * rank is used by fair linking during extract-min consolidation.
  *
  * The after pointer is also used to thread temporary root lists while rebuilding
- * the heap after a pop.
+ * the heap after extract-min.
  */
 struct kaplan_heap_node {
     /** Common public handle header. Must be the first field. */
-    struct priority_queue_handle handle;
+    struct heapx_handle handle;
     /** Parent node, or NULL for a root candidate. */
     struct kaplan_heap_node *parent;
     /** First child in the child list, or NULL. */
@@ -52,73 +52,73 @@ struct kaplan_heap_node {
  * @ingroup heap_backends
  * @brief Concrete Kaplan heap object.
  *
- * Unlike the Fibonacci backend, there is at most one root tree when the queue
- * is in its steady state. delete-min temporarily treats the removed root's
+ * Unlike the Fibonacci backend, there is at most one root tree when the heap
+ * is in its steady state. extract-min temporarily treats the removed root's
  * children as roots before consolidating them back into one tree.
  */
 struct kaplan_heap {
-    /** Common priority_queue base. Must be the first field. */
-    struct priority_queue base;
+    /** Common heapx_heap base. Must be the first field. */
+    struct heapx_heap base;
     /** Root of the heap-ordered tree, or NULL when empty. */
     struct kaplan_heap_node *root;
     /** Number of stored items. */
     size_t size;
 };
 
-static void kaplan_heap_destroy(struct priority_queue *queue);
-static int kaplan_heap_push(struct priority_queue *queue, void *item);
-static struct priority_queue_handle *kaplan_heap_push_handle(
-    struct priority_queue *queue,
+static void kaplan_heap_destroy(struct heapx_heap *base);
+static int kaplan_heap_insert(struct heapx_heap *base, void *item);
+static struct heapx_handle *kaplan_heap_insert_handle(
+    struct heapx_heap *base,
     void *item
 );
 static int kaplan_heap_decrease_key(
-    struct priority_queue *queue,
-    struct priority_queue_handle *handle
+    struct heapx_heap *base,
+    struct heapx_handle *handle
 );
 static void *kaplan_heap_remove(
-    struct priority_queue *queue,
-    struct priority_queue_handle *handle
+    struct heapx_heap *base,
+    struct heapx_handle *handle
 );
 static int kaplan_heap_contains(
-    const struct priority_queue *queue,
+    const struct heapx_heap *base,
     const void *item
 );
-static void *kaplan_heap_peek(const struct priority_queue *queue);
-static void *kaplan_heap_pop(struct priority_queue *queue);
-static size_t kaplan_heap_size(const struct priority_queue *queue);
-static int kaplan_heap_empty(const struct priority_queue *queue);
+static void *kaplan_heap_peek_min(const struct heapx_heap *base);
+static void *kaplan_heap_extract_min(struct heapx_heap *base);
+static size_t kaplan_heap_size(const struct heapx_heap *base);
+static int kaplan_heap_empty(const struct heapx_heap *base);
 
-/** @brief Static vtable exposed through the common priority_queue base. */
-static const struct priority_queue_vtable kaplan_heap_vtable = {
+/** @brief Static vtable exposed through the common heapx_heap base. */
+static const struct heapx_vtable kaplan_heap_vtable = {
     kaplan_heap_destroy,
-    kaplan_heap_push,
-    kaplan_heap_push_handle,
+    kaplan_heap_insert,
+    kaplan_heap_insert_handle,
     kaplan_heap_decrease_key,
     kaplan_heap_remove,
     kaplan_heap_contains,
-    kaplan_heap_peek,
-    kaplan_heap_pop,
+    kaplan_heap_peek_min,
+    kaplan_heap_extract_min,
     kaplan_heap_size,
     kaplan_heap_empty
 };
 
 /** @brief Recover the concrete heap object from the abstract base pointer. */
-static struct kaplan_heap *kaplan_heap_from_queue(struct priority_queue *queue)
+static struct kaplan_heap *kaplan_heap_from_base(struct heapx_heap *base)
 {
-    return (struct kaplan_heap *)queue;
+    return (struct kaplan_heap *)base;
 }
 
-/** @brief Const-preserving variant of kaplan_heap_from_queue(). */
-static const struct kaplan_heap *kaplan_heap_from_const_queue(
-    const struct priority_queue *queue
+/** @brief Const-preserving variant of kaplan_heap_from_base(). */
+static const struct kaplan_heap *kaplan_heap_from_const_base(
+    const struct heapx_heap *base
 )
 {
-    return (const struct kaplan_heap *)queue;
+    return (const struct kaplan_heap *)base;
 }
 
 /** @brief Recover a Kaplan heap node from its public handle pointer. */
 static struct kaplan_heap_node *kaplan_heap_node_from_handle(
-    struct priority_queue_handle *handle
+    struct heapx_handle *handle
 )
 {
     return (struct kaplan_heap_node *)handle;
@@ -133,7 +133,7 @@ static struct kaplan_heap_node *kaplan_heap_node_create(void *item)
     if (node == NULL)
         return NULL;
 
-    priority_queue_handle_init(&node->handle, NULL, item);
+    heapx_handle_init(&node->handle, NULL, item);
     node->parent = NULL;
     node->child = NULL;
     node->before = NULL;
@@ -215,7 +215,7 @@ static struct kaplan_heap_node *kaplan_heap_link(
 /**
  * @brief Link two roots of equal rank and increment the resulting root rank.
  *
- * Fair links are used during delete-min consolidation to keep the resulting
+ * Fair links are used during extract-min consolidation to keep the resulting
  * tree ranks under control.
  */
 static struct kaplan_heap_node *kaplan_heap_fair_link(
@@ -264,7 +264,7 @@ static struct kaplan_heap_node *kaplan_heap_link_roots_naively(
 }
 
 /**
- * @brief Consolidate child roots after delete-min.
+ * @brief Consolidate child roots after extract-min.
  *
  * Roots of the same rank are joined with fair links. The remaining roots are
  * then linked naively into a single heap-ordered tree.
@@ -404,7 +404,7 @@ static void kaplan_heap_decrease_ranks(
     } while (!current->marked);
 }
 
-struct priority_queue *kaplan_heap_create(priority_queue_cmp_fn cmp)
+struct heapx_heap *kaplan_heap_create(heapx_cmp_fn cmp)
 {
     struct kaplan_heap *heap;
 
@@ -412,7 +412,7 @@ struct priority_queue *kaplan_heap_create(priority_queue_cmp_fn cmp)
     if (heap == NULL)
         return NULL;
 
-    priority_queue_init(&heap->base, &kaplan_heap_vtable, cmp);
+    heapx_heap_init(&heap->base, &kaplan_heap_vtable, cmp);
     heap->root = NULL;
     heap->size = 0;
 
@@ -420,9 +420,9 @@ struct priority_queue *kaplan_heap_create(priority_queue_cmp_fn cmp)
 }
 
 /** @brief Release all Kaplan-heap-owned nodes and the heap object. */
-static void kaplan_heap_destroy(struct priority_queue *queue)
+static void kaplan_heap_destroy(struct heapx_heap *base)
 {
-    struct kaplan_heap *heap = kaplan_heap_from_queue(queue);
+    struct kaplan_heap *heap = kaplan_heap_from_base(base);
 
     kaplan_heap_destroy_nodes(heap->root);
     free(heap);
@@ -433,27 +433,27 @@ static void kaplan_heap_destroy(struct priority_queue *queue)
  *
  * This is the naive-link insertion step from the simple Fibonacci heap model.
  */
-static int kaplan_heap_push(struct priority_queue *queue, void *item)
+static int kaplan_heap_insert(struct heapx_heap *base, void *item)
 {
-    return kaplan_heap_push_handle(queue, item) == NULL ? -1 : 0;
+    return kaplan_heap_insert_handle(base, item) == NULL ? -1 : 0;
 }
 
 /**
  * @brief Insert an item by linking a singleton node and return its handle.
  */
-static struct priority_queue_handle *kaplan_heap_push_handle(
-    struct priority_queue *queue,
+static struct heapx_handle *kaplan_heap_insert_handle(
+    struct heapx_heap *base,
     void *item
 )
 {
-    struct kaplan_heap *heap = kaplan_heap_from_queue(queue);
+    struct kaplan_heap *heap = kaplan_heap_from_base(base);
     struct kaplan_heap_node *node;
 
     node = kaplan_heap_node_create(item);
     if (node == NULL)
         return NULL;
 
-    node->handle.queue = queue;
+    node->handle.heap = base;
     if (heap->root == NULL)
         heap->root = node;
     else
@@ -467,11 +467,11 @@ static struct priority_queue_handle *kaplan_heap_push_handle(
  * @brief Repair a decreased node with cascading rank changes and one cut.
  */
 static int kaplan_heap_decrease_key(
-    struct priority_queue *queue,
-    struct priority_queue_handle *handle
+    struct heapx_heap *base,
+    struct heapx_handle *handle
 )
 {
-    struct kaplan_heap *heap = kaplan_heap_from_queue(queue);
+    struct kaplan_heap *heap = kaplan_heap_from_base(base);
     struct kaplan_heap_node *node = kaplan_heap_node_from_handle(handle);
 
     if (node != heap->root) {
@@ -489,20 +489,20 @@ static int kaplan_heap_decrease_key(
  * The public API cannot express a backend-independent minus-infinity key, so
  * this function simulates decrease-key-to-minus-infinity structurally: repair
  * ranks, cut the target, force the old root to become one of its children, then
- * reuse delete-min.
+ * reuse extract-min.
  */
 static void *kaplan_heap_remove(
-    struct priority_queue *queue,
-    struct priority_queue_handle *handle
+    struct heapx_heap *base,
+    struct heapx_handle *handle
 )
 {
-    struct kaplan_heap *heap = kaplan_heap_from_queue(queue);
+    struct kaplan_heap *heap = kaplan_heap_from_base(base);
     struct kaplan_heap_node *node = kaplan_heap_node_from_handle(handle);
     struct kaplan_heap_node *old_root = heap->root;
     void *item = handle->item;
 
     if (node == heap->root) {
-        (void)kaplan_heap_pop(queue);
+        (void)kaplan_heap_extract_min(base);
         return item;
     }
 
@@ -512,7 +512,7 @@ static void *kaplan_heap_remove(
     node->marked = 0;
     heap->root = node;
 
-    (void)kaplan_heap_pop(queue);
+    (void)kaplan_heap_extract_min(base);
     return item;
 }
 
@@ -520,19 +520,19 @@ static void *kaplan_heap_remove(
  * @brief Return whether item is stored by pointer identity.
  */
 static int kaplan_heap_contains(
-    const struct priority_queue *queue,
+    const struct heapx_heap *base,
     const void *item
 )
 {
-    const struct kaplan_heap *heap = kaplan_heap_from_const_queue(queue);
+    const struct kaplan_heap *heap = kaplan_heap_from_const_base(base);
 
     return kaplan_heap_find_node(heap->root, item) != NULL;
 }
 
 /** @brief Return the root item without removing it. */
-static void *kaplan_heap_peek(const struct priority_queue *queue)
+static void *kaplan_heap_peek_min(const struct heapx_heap *base)
 {
-    const struct kaplan_heap *heap = kaplan_heap_from_const_queue(queue);
+    const struct kaplan_heap *heap = kaplan_heap_from_const_base(base);
 
     if (heap->root == NULL)
         return NULL;
@@ -546,9 +546,9 @@ static void *kaplan_heap_peek(const struct priority_queue *queue)
  * The root wrapper is freed after its child list has been consolidated into the
  * new heap root. The returned item pointer remains caller-owned.
  */
-static void *kaplan_heap_pop(struct priority_queue *queue)
+static void *kaplan_heap_extract_min(struct heapx_heap *base)
 {
-    struct kaplan_heap *heap = kaplan_heap_from_queue(queue);
+    struct kaplan_heap *heap = kaplan_heap_from_base(base);
     struct kaplan_heap_node *root = heap->root;
     struct kaplan_heap_node *children;
     void *item;
@@ -557,7 +557,7 @@ static void *kaplan_heap_pop(struct priority_queue *queue)
         return NULL;
 
     item = root->handle.item;
-    root->handle.queue = NULL;
+    root->handle.heap = NULL;
     children = root->child;
     heap->size--;
     heap->root = kaplan_heap_consolidate(heap, children);
@@ -567,13 +567,13 @@ static void *kaplan_heap_pop(struct priority_queue *queue)
 }
 
 /** @brief Return the current number of stored items. */
-static size_t kaplan_heap_size(const struct priority_queue *queue)
+static size_t kaplan_heap_size(const struct heapx_heap *base)
 {
-    return kaplan_heap_from_const_queue(queue)->size;
+    return kaplan_heap_from_const_base(base)->size;
 }
 
 /** @brief Return whether the heap contains no items. */
-static int kaplan_heap_empty(const struct priority_queue *queue)
+static int kaplan_heap_empty(const struct heapx_heap *base)
 {
-    return kaplan_heap_size(queue) == 0;
+    return kaplan_heap_size(base) == 0;
 }

@@ -1,13 +1,13 @@
-# hpqlib
+# heapx
 
-hpqlib is a compact C99 library for experimenting with heap-backed priority
-queues behind one abstract API. The project intentionally stays focused on
-heap-based implementations so comparisons remain small, direct, and easy to
-reason about.
+heapx is a compact C99 heap library and experimental workspace. It focuses on
+heap data structures and exposes them through one common heap API, so
+different heap variants can be used, tested, and benchmarked behind the same
+interface.
 
 The repository contains:
 
-- a public C API based on the opaque `struct priority_queue` type;
+- a public C API based on the opaque `struct heapx_heap` type;
 - binary min-heap, Fibonacci heap, and Kaplan heap implementations;
 - C tests and a DIMACS-backed Dijkstra benchmark;
 - generated C API documentation through Doxygen;
@@ -15,54 +15,56 @@ The repository contains:
 
 ## Design Goals
 
-hpqlib is built around a few explicit constraints:
+heapx is built around a few explicit constraints:
 
 - the library is written in portable C99;
-- callers use one public abstract priority-queue API;
+- the repository remains focused on heap data structures;
+- callers use one public heap API for heap operations;
 - concrete heap implementations dispatch through an internal vtable;
 - stored items are generic `void *` pointers and remain owned by the caller;
 - targeted operations use insertion handles returned by
-  `priority_queue_push_handle()`.
+  `heapx_insert_handle()`.
 
 The project is not intended to become a generic collection of unrelated
-priority-queue families. Current and planned implementations are heap-based.
+heap families. Current and planned implementations are heap-based;
+the heap API is the stable interface used to exercise those heaps.
 
 ## Architecture
 
 The public type is opaque:
 
 ```c
-struct priority_queue;
+struct heapx_heap;
 ```
 
-Client code creates a queue with:
+Client code creates a heap with:
 
 ```c
-struct priority_queue *priority_queue_create(
-    enum priority_queue_implementation implementation,
-    priority_queue_cmp_fn cmp
+struct heapx_heap *heapx_create(
+    enum heapx_implementation implementation,
+    heapx_cmp_fn cmp
 );
 ```
 
-The selected backend embeds the common base object as its first field and
-provides a private `priority_queue_vtable`. Public functions define common
-edge-case behavior, such as `NULL` queue handling, and dispatch to the selected
-backend.
+The selected heap backend embeds the common base object as its first field and
+provides a private `heapx_vtable`. Public functions define common
+edge-case behavior, such as `NULL` heap handling, and dispatch to the selected
+heap implementation.
 
 Available implementations are:
 
-| C enum | Backend | Status |
+| C enum | Heap backend | Status |
 | --- | --- | --- |
-| `PRIORITY_QUEUE_BINARY_HEAP` | Binary min-heap | implemented |
-| `PRIORITY_QUEUE_FIBONACCI_HEAP` | Fibonacci heap | implemented |
-| `PRIORITY_QUEUE_KAPLAN_HEAP` | Simple Fibonacci heap from "Fibonacci Heaps Revisited" | implemented |
+| `HEAPX_BINARY_HEAP` | Binary min-heap | implemented |
+| `HEAPX_FIBONACCI_HEAP` | Fibonacci heap | implemented |
+| `HEAPX_KAPLAN_HEAP` | Simple Fibonacci heap from "Fibonacci Heaps Revisited" | implemented |
 
 ## C Example
 
 ```c
 #include <stdio.h>
 
-#include "hpqlib/priority_queue.h"
+#include "heapx/heap.h"
 
 static int int_cmp(const void *lhs, const void *rhs)
 {
@@ -79,22 +81,22 @@ static int int_cmp(const void *lhs, const void *rhs)
 int main(void)
 {
     int values[] = { 7, 3, 9, 1 };
-    struct priority_queue *queue;
+    struct heapx_heap *heap;
     size_t i;
 
-    queue = priority_queue_create(PRIORITY_QUEUE_BINARY_HEAP, int_cmp);
-    if (queue == NULL)
+    heap = heapx_create(HEAPX_BINARY_HEAP, int_cmp);
+    if (heap == NULL)
         return 1;
 
     for (i = 0; i < sizeof(values) / sizeof(values[0]); i++)
-        priority_queue_push(queue, &values[i]);
+        heapx_insert(heap, &values[i]);
 
-    while (!priority_queue_empty(queue)) {
-        int *value = priority_queue_pop(queue);
+    while (!heapx_empty(heap)) {
+        int *value = heapx_extract_min(heap);
         printf("%d\n", *value);
     }
 
-    priority_queue_destroy(queue);
+    heapx_destroy(heap);
     return 0;
 }
 ```
@@ -121,7 +123,7 @@ make docs
 
 The generated HTML is written to `build/docs/html/`.
 
-Run the C Dijkstra benchmark on the default DIMACS graph:
+Run the heap comparison benchmark on the default DIMACS graph:
 
 ```sh
 make benchmark-smoke
@@ -141,8 +143,8 @@ make clean
 
 ## Graph Datasets
 
-DIMACS graph files are local benchmark inputs and are ignored by git. Place
-`.gr` files under `graphs/dimacs/`.
+DIMACS graph files are local benchmark inputs for comparing heap backends and
+are ignored by git. Place `.gr` files under `graphs/dimacs/`.
 
 The default smoke benchmark expects:
 
@@ -156,11 +158,11 @@ than committed repository content.
 ## Repository Layout
 
 - `include/`: public headers consumed by client code.
-- `include/hpqlib/priority_queue.h`: public priority-queue API.
+- `include/heapx/heap.h`: public heap API.
 - `src/`: private C implementation sources.
-- `src/priority_queue.c`: public API dispatch and implementation factory.
-- `src/priority_queue_internal.h`: internal base object layout and vtable.
-- `src/heaps/`: heap-based implementations.
+- `src/heap.c`: public API dispatch and heap factory.
+- `src/heap_internal.h`: internal base object layout and vtable.
+- `src/heaps/`: concrete heap implementations.
 - `tests/`: C tests and benchmark source.
 - `graphs/`: local graph datasets for manual benchmark runs.
 - `docs/papers/`: reference papers used during development.
@@ -169,21 +171,33 @@ than committed repository content.
 
 ## Current Limitations
 
-The public C API intentionally stays compact:
+The public C API intentionally stays compact and heap-shaped. It is
+the current API for all heap backends:
 
 - `create`
 - `destroy`
-- `push`
-- `push_handle`
+- `insert`
+- `insert_handle`
 - `decrease_key`
 - `remove`
 - `contains`
-- `peek`
-- `pop`
+- `peek_min`
+- `extract_min`
 - `size`
 - `empty`
 
 The targeted operations `decrease_key` and `remove` use handles returned by
-`push_handle`, matching the usual heap assumption that the item's position is
+`insert_handle`, matching the usual heap assumption that the item's position is
 known. `contains` remains a pointer-identity convenience query and is linear in
 the current backends.
+
+## Roadmap
+
+The next planned work keeps the repository centered on heaps:
+
+- add focused correctness and sanitizer targets to the build;
+- add a small versioned DIMACS graph for reproducible benchmark smoke tests;
+- broaden randomized tests that compare all heap backends against a simple
+  reference model;
+- evaluate whether a future heap-native public API should wrap or replace the
+  current `heapx_*` API.

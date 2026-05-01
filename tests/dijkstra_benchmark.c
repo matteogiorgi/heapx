@@ -8,7 +8,7 @@
 #include <string.h>
 #include <time.h>
 
-#include "hpqlib/priority_queue.h"
+#include "heapx/heap.h"
 
 struct csr_graph {
     size_t node_count;
@@ -29,7 +29,7 @@ struct dijkstra_node {
     unsigned id;
     uint64_t distance;
     int finalized;
-    struct priority_queue_handle *handle;
+    struct heapx_handle *handle;
 };
 
 struct dijkstra_result {
@@ -37,12 +37,12 @@ struct dijkstra_result {
     uint64_t checksum;
     uint64_t reachable_count;
     uint64_t relaxations;
-    uint64_t pushes;
+    uint64_t inserts;
     uint64_t decrease_keys;
 };
 
 struct implementation_case {
-    enum priority_queue_implementation implementation;
+    enum heapx_implementation implementation;
     const char *name;
 };
 
@@ -335,11 +335,11 @@ static uint64_t dijkstra_checksum(
 static int run_dijkstra(
     const struct csr_graph *graph,
     unsigned source,
-    enum priority_queue_implementation implementation,
+    enum heapx_implementation implementation,
     struct dijkstra_result *result
 )
 {
-    struct priority_queue *queue;
+    struct heapx_heap *heap;
     struct dijkstra_node *nodes;
     struct timespec start;
     struct timespec end;
@@ -352,22 +352,22 @@ static int run_dijkstra(
     if (nodes == NULL)
         return -1;
 
-    queue = priority_queue_create(implementation, dijkstra_node_cmp);
-    if (queue == NULL)
+    heap = heapx_create(implementation, dijkstra_node_cmp);
+    if (heap == NULL)
         goto done_nodes;
 
     memset(result, 0, sizeof(*result));
     nodes[source].distance = 0;
-    nodes[source].handle = priority_queue_push_handle(queue, &nodes[source]);
+    nodes[source].handle = heapx_insert_handle(heap, &nodes[source]);
     if (nodes[source].handle == NULL)
-        goto done_queue;
-    result->pushes++;
+        goto done_heap;
+    result->inserts++;
 
     if (clock_gettime(CLOCK_MONOTONIC, &start) != 0)
-        goto done_queue;
+        goto done_heap;
 
-    while (!priority_queue_empty(queue)) {
-        struct dijkstra_node *node = priority_queue_pop(queue);
+    while (!heapx_empty(heap)) {
+        struct dijkstra_node *node = heapx_extract_min(heap);
         size_t begin;
         size_t end_offset;
         size_t edge;
@@ -398,20 +398,20 @@ static int run_dijkstra(
 
             neighbor->distance = candidate;
             if (neighbor->handle == NULL) {
-                neighbor->handle = priority_queue_push_handle(queue, neighbor);
+                neighbor->handle = heapx_insert_handle(heap, neighbor);
                 if (neighbor->handle == NULL)
-                    goto done_queue;
-                result->pushes++;
+                    goto done_heap;
+                result->inserts++;
             } else {
-                if (priority_queue_decrease_key(queue, neighbor->handle) != 0)
-                    goto done_queue;
+                if (heapx_decrease_key(heap, neighbor->handle) != 0)
+                    goto done_heap;
                 result->decrease_keys++;
             }
         }
     }
 
     if (clock_gettime(CLOCK_MONOTONIC, &end) != 0)
-        goto done_queue;
+        goto done_heap;
 
     result->seconds = elapsed_seconds(start, end);
     result->checksum = dijkstra_checksum(
@@ -421,8 +421,8 @@ static int run_dijkstra(
     );
     status = 0;
 
-done_queue:
-    priority_queue_destroy(queue);
+done_heap:
+    heapx_destroy(heap);
 done_nodes:
     dijkstra_nodes_destroy(nodes);
     return status;
@@ -434,9 +434,9 @@ static int run_all_implementations(
 )
 {
     const struct implementation_case cases[] = {
-        { PRIORITY_QUEUE_BINARY_HEAP, "binary_heap" },
-        { PRIORITY_QUEUE_FIBONACCI_HEAP, "fibonacci_heap" },
-        { PRIORITY_QUEUE_KAPLAN_HEAP, "kaplan_heap" }
+        { HEAPX_BINARY_HEAP, "binary_heap" },
+        { HEAPX_FIBONACCI_HEAP, "fibonacci_heap" },
+        { HEAPX_KAPLAN_HEAP, "kaplan_heap" }
     };
     struct dijkstra_result results[sizeof(cases) / sizeof(cases[0])];
     uint64_t expected_checksum = 0;
@@ -456,7 +456,7 @@ static int run_all_implementations(
         "seconds",
         "reachable",
         "relax",
-        "pushes",
+        "inserts",
         "decrease",
         "checksum"
     );
@@ -492,7 +492,7 @@ static int run_all_implementations(
             results[i].seconds,
             results[i].reachable_count,
             results[i].relaxations,
-            results[i].pushes,
+            results[i].inserts,
             results[i].decrease_keys,
             results[i].checksum
         );

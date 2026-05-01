@@ -1,7 +1,8 @@
 # Graph Datasets
 
 This directory is reserved for local DIMACS shortest-path graph files used by
-manual benchmark runs. Dataset files are intentionally ignored by git.
+manual heap-backend benchmark runs. Dataset files are intentionally ignored by
+git.
 
 The C Dijkstra benchmark reads `.gr` files with lines like:
 
