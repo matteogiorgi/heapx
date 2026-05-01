@@ -1,0 +1,16 @@
+# Build artifacts
+build/
+*.o
+*.a
+*.so
+
+# Local benchmark datasets
+graphs/dimacs/*.gr
+graphs/dimacs/*.gz
+!graphs/dimacs/.gitkeep
+
+# Editor and local tooling files
+tags
+*~
+.vscode/
+.codex/
