@@ -32,8 +32,12 @@
  * the heap after extract-min.
  */
 struct kaplan_heap_node {
-    /** Common public handle header. Must be the first field. */
+    /** Public generational handle associated with this node. */
     struct heapx_handle handle;
+    /** Non-zero when handle was requested by the caller. */
+    int has_handle;
+    /** Caller-owned item pointer stored in this node. */
+    void *item;
     /** Parent node, or NULL for a root candidate. */
     struct kaplan_heap_node *parent;
     /** First child in the child list, or NULL. */
@@ -63,21 +67,28 @@ struct kaplan_heap {
     struct kaplan_heap_node *root;
     /** Number of stored items. */
     size_t size;
+    /** Pool used for node wrappers. */
+    struct heapx_node_pool nodes;
+    /** Reusable consolidation table indexed by rank. */
+    struct kaplan_heap_node **rank_table;
+    /** Capacity of rank_table. */
+    size_t rank_table_capacity;
 };
 
 static void kaplan_heap_destroy(struct heapx_heap *base);
 static int kaplan_heap_insert(struct heapx_heap *base, void *item);
-static struct heapx_handle *kaplan_heap_insert_handle(
+static int kaplan_heap_insert_handle(
     struct heapx_heap *base,
-    void *item
+    void *item,
+    struct heapx_handle *out
 );
 static int kaplan_heap_decrease_key(
     struct heapx_heap *base,
-    struct heapx_handle *handle
+    void *owner
 );
 static void *kaplan_heap_remove(
     struct heapx_heap *base,
-    struct heapx_handle *handle
+    void *owner
 );
 static int kaplan_heap_contains(
     const struct heapx_heap *base,
@@ -87,6 +98,7 @@ static void *kaplan_heap_peek_min(const struct heapx_heap *base);
 static void *kaplan_heap_extract_min(struct heapx_heap *base);
 static size_t kaplan_heap_size(const struct heapx_heap *base);
 static int kaplan_heap_empty(const struct heapx_heap *base);
+static int kaplan_heap_check_invariants(const struct heapx_heap *base);
 
 /** @brief Static vtable exposed through the common heapx_heap base. */
 static const struct heapx_vtable kaplan_heap_vtable = {
@@ -99,7 +111,8 @@ static const struct heapx_vtable kaplan_heap_vtable = {
     kaplan_heap_peek_min,
     kaplan_heap_extract_min,
     kaplan_heap_size,
-    kaplan_heap_empty
+    kaplan_heap_empty,
+    kaplan_heap_check_invariants
 };
 
 /** @brief Recover the concrete heap object from the abstract base pointer. */
@@ -116,24 +129,20 @@ static const struct kaplan_heap *kaplan_heap_from_const_base(
     return (const struct kaplan_heap *)base;
 }
 
-/** @brief Recover a Kaplan heap node from its public handle pointer. */
-static struct kaplan_heap_node *kaplan_heap_node_from_handle(
-    struct heapx_handle *handle
-)
-{
-    return (struct kaplan_heap_node *)handle;
-}
-
 /** @brief Allocate and initialize a Kaplan heap node. */
-static struct kaplan_heap_node *kaplan_heap_node_create(void *item)
+static struct kaplan_heap_node *kaplan_heap_node_create(
+    struct kaplan_heap *heap,
+    void *item
+)
 {
     struct kaplan_heap_node *node;
 
-    node = malloc(sizeof(*node));
+    node = heapx_node_pool_alloc(&heap->nodes);
     if (node == NULL)
         return NULL;
 
-    heapx_handle_init(&node->handle, NULL, item);
+    node->has_handle = 0;
+    node->item = item;
     node->parent = NULL;
     node->child = NULL;
     node->before = NULL;
@@ -142,6 +151,15 @@ static struct kaplan_heap_node *kaplan_heap_node_create(void *item)
     node->marked = 0;
 
     return node;
+}
+
+/** @brief Return a node wrapper to the heap's node pool. */
+static void kaplan_heap_node_destroy(
+    struct kaplan_heap *heap,
+    struct kaplan_heap_node *node
+)
+{
+    heapx_node_pool_free(&heap->nodes, node);
 }
 
 /**
@@ -203,7 +221,7 @@ static struct kaplan_heap_node *kaplan_heap_link(
     struct kaplan_heap_node *right
 )
 {
-    if (heap->base.cmp(right->handle.item, left->handle.item) < 0) {
+    if (heap->base.cmp(right->item, left->item) < 0) {
         kaplan_heap_add_child(right, left);
         return right;
     }
@@ -263,27 +281,50 @@ static struct kaplan_heap_node *kaplan_heap_link_roots_naively(
     return root;
 }
 
+/** @brief Ensure the reusable rank table can store capacity slots. */
+static int kaplan_heap_reserve_rank_table(
+    struct kaplan_heap *heap,
+    size_t capacity
+)
+{
+    struct kaplan_heap_node **table;
+    size_t i;
+
+    if (capacity <= heap->rank_table_capacity)
+        return 0;
+
+    table = realloc(heap->rank_table, capacity * sizeof(*table));
+    if (table == NULL)
+        return -1;
+
+    heap->rank_table = table;
+    for (i = heap->rank_table_capacity; i < capacity; i++)
+        heap->rank_table[i] = NULL;
+
+    heap->rank_table_capacity = capacity;
+    return 0;
+}
+
 /**
  * @brief Consolidate child roots after extract-min.
  *
  * Roots of the same rank are joined with fair links. The remaining roots are
  * then linked naively into a single heap-ordered tree.
  *
- * The by-rank table is sized from the number of items remaining after the root
- * has been removed and from the largest rank currently present among the roots.
- * The second bound keeps consolidation safe after decrease-key rank repairs.
- * If allocation fails, the fallback still rebuilds a valid heap-ordered tree.
+ * The reusable rank table is sized from the largest rank currently present
+ * among the roots and from the number of roots being consolidated. If
+ * allocation fails, the fallback still rebuilds a valid heap-ordered tree.
  */
 static struct kaplan_heap_node *kaplan_heap_consolidate(
     struct kaplan_heap *heap,
     struct kaplan_heap_node *roots
 )
 {
-    struct kaplan_heap_node **by_rank;
     struct kaplan_heap_node *node;
     struct kaplan_heap_node *root = NULL;
     size_t rank_capacity;
     size_t max_rank = 0;
+    size_t max_rank_seen = 0;
     size_t root_count = 0;
     size_t i;
 
@@ -296,12 +337,11 @@ static struct kaplan_heap_node *kaplan_heap_consolidate(
             max_rank = node->rank;
     }
 
-    rank_capacity = heap->size + 1;
-    if (rank_capacity <= max_rank + root_count)
-        rank_capacity = max_rank + root_count + 1;
+    if (max_rank > (size_t)-1 - root_count - 1)
+        return kaplan_heap_link_roots_naively(heap, roots);
 
-    by_rank = calloc(rank_capacity, sizeof(*by_rank));
-    if (by_rank == NULL)
+    rank_capacity = max_rank + root_count + 1;
+    if (kaplan_heap_reserve_rank_table(heap, rank_capacity) != 0)
         return kaplan_heap_link_roots_naively(heap, roots);
 
     node = roots;
@@ -314,45 +354,34 @@ static struct kaplan_heap_node *kaplan_heap_consolidate(
         node->after = NULL;
 
         rank = node->rank;
-        while (by_rank[rank] != NULL) {
-            struct kaplan_heap_node *other = by_rank[rank];
+        while (heap->rank_table[rank] != NULL) {
+            struct kaplan_heap_node *other = heap->rank_table[rank];
 
-            by_rank[rank] = NULL;
+            heap->rank_table[rank] = NULL;
             node = kaplan_heap_fair_link(heap, node, other);
             rank = node->rank;
         }
 
-        by_rank[rank] = node;
-        if (rank > max_rank)
-            max_rank = rank;
+        heap->rank_table[rank] = node;
+        if (rank > max_rank_seen)
+            max_rank_seen = rank;
 
         node = next;
     }
 
-    for (i = 0; i <= max_rank; i++) {
-        if (by_rank[i] == NULL)
+    for (i = 0; i <= max_rank_seen; i++) {
+        if (heap->rank_table[i] == NULL)
             continue;
 
         if (root == NULL)
-            root = by_rank[i];
+            root = heap->rank_table[i];
         else
-            root = kaplan_heap_link(heap, root, by_rank[i]);
+            root = kaplan_heap_link(heap, root, heap->rank_table[i]);
+
+        heap->rank_table[i] = NULL;
     }
 
-    free(by_rank);
     return root;
-}
-
-/** @brief Recursively release node and its siblings/children. */
-static void kaplan_heap_destroy_nodes(struct kaplan_heap_node *node)
-{
-    while (node != NULL) {
-        struct kaplan_heap_node *next = node->after;
-
-        kaplan_heap_destroy_nodes(node->child);
-        free(node);
-        node = next;
-    }
 }
 
 /**
@@ -366,7 +395,7 @@ static struct kaplan_heap_node *kaplan_heap_find_node(
     while (node != NULL) {
         struct kaplan_heap_node *found;
 
-        if (node->handle.item == item)
+        if (node->item == item)
             return node;
 
         found = kaplan_heap_find_node(node->child, item);
@@ -415,17 +444,29 @@ struct heapx_heap *kaplan_heap_create(heapx_cmp_fn cmp)
     heapx_heap_init(&heap->base, &kaplan_heap_vtable, cmp);
     heap->root = NULL;
     heap->size = 0;
+    heap->rank_table = NULL;
+    heap->rank_table_capacity = 0;
+    if (
+        heapx_node_pool_init(
+            &heap->nodes,
+            sizeof(struct kaplan_heap_node),
+            256
+        ) != 0
+        ) {
+        free(heap);
+        return NULL;
+    }
 
     return &heap->base;
 }
 
-/** @brief Release all Kaplan-heap-owned nodes and the heap object. */
+/** @brief Release all Kaplan-heap-owned node storage. */
 static void kaplan_heap_destroy(struct heapx_heap *base)
 {
     struct kaplan_heap *heap = kaplan_heap_from_base(base);
 
-    kaplan_heap_destroy_nodes(heap->root);
-    free(heap);
+    free(heap->rank_table);
+    heapx_node_pool_destroy(&heap->nodes);
 }
 
 /**
@@ -433,34 +474,52 @@ static void kaplan_heap_destroy(struct heapx_heap *base)
  *
  * This is the naive-link insertion step from the simple Fibonacci heap model.
  */
-static int kaplan_heap_insert(struct heapx_heap *base, void *item)
-{
-    return kaplan_heap_insert_handle(base, item) == NULL ? -1 : 0;
-}
-
-/**
- * @brief Insert an item by linking a singleton node and return its handle.
- */
-static struct heapx_handle *kaplan_heap_insert_handle(
+static int kaplan_heap_insert_node(
     struct heapx_heap *base,
-    void *item
+    void *item,
+    struct heapx_handle *out
 )
 {
     struct kaplan_heap *heap = kaplan_heap_from_base(base);
     struct kaplan_heap_node *node;
 
-    node = kaplan_heap_node_create(item);
+    node = kaplan_heap_node_create(heap, item);
     if (node == NULL)
-        return NULL;
+        return -1;
 
-    node->handle.heap = base;
+    node->has_handle = out != NULL;
+    if (out != NULL) {
+        if (heapx_handle_attach(base, item, node, out) != 0) {
+            kaplan_heap_node_destroy(heap, node);
+            return -1;
+        }
+        node->handle = *out;
+    }
+
     if (heap->root == NULL)
         heap->root = node;
     else
         heap->root = kaplan_heap_link(heap, heap->root, node);
 
     heap->size++;
-    return &node->handle;
+    return 0;
+}
+
+static int kaplan_heap_insert(struct heapx_heap *base, void *item)
+{
+    return kaplan_heap_insert_node(base, item, NULL);
+}
+
+/**
+ * @brief Insert an item by linking a singleton node and return its handle.
+ */
+static int kaplan_heap_insert_handle(
+    struct heapx_heap *base,
+    void *item,
+    struct heapx_handle *out
+)
+{
+    return kaplan_heap_insert_node(base, item, out);
 }
 
 /**
@@ -468,11 +527,11 @@ static struct heapx_handle *kaplan_heap_insert_handle(
  */
 static int kaplan_heap_decrease_key(
     struct heapx_heap *base,
-    struct heapx_handle *handle
+    void *owner
 )
 {
     struct kaplan_heap *heap = kaplan_heap_from_base(base);
-    struct kaplan_heap_node *node = kaplan_heap_node_from_handle(handle);
+    struct kaplan_heap_node *node = owner;
 
     if (node != heap->root) {
         kaplan_heap_decrease_ranks(heap, node);
@@ -493,13 +552,13 @@ static int kaplan_heap_decrease_key(
  */
 static void *kaplan_heap_remove(
     struct heapx_heap *base,
-    struct heapx_handle *handle
+    void *owner
 )
 {
     struct kaplan_heap *heap = kaplan_heap_from_base(base);
-    struct kaplan_heap_node *node = kaplan_heap_node_from_handle(handle);
+    struct kaplan_heap_node *node = owner;
     struct kaplan_heap_node *old_root = heap->root;
-    void *item = handle->item;
+    void *item = node->item;
 
     if (node == heap->root) {
         (void)kaplan_heap_extract_min(base);
@@ -537,7 +596,7 @@ static void *kaplan_heap_peek_min(const struct heapx_heap *base)
     if (heap->root == NULL)
         return NULL;
 
-    return heap->root->handle.item;
+    return heap->root->item;
 }
 
 /**
@@ -556,13 +615,14 @@ static void *kaplan_heap_extract_min(struct heapx_heap *base)
     if (root == NULL)
         return NULL;
 
-    item = root->handle.item;
-    root->handle.heap = NULL;
+    item = root->item;
+    if (root->has_handle)
+        heapx_handle_release(base, root->handle);
     children = root->child;
     heap->size--;
     heap->root = kaplan_heap_consolidate(heap, children);
 
-    free(root);
+    kaplan_heap_node_destroy(heap, root);
     return item;
 }
 
@@ -576,4 +636,65 @@ static size_t kaplan_heap_size(const struct heapx_heap *base)
 static int kaplan_heap_empty(const struct heapx_heap *base)
 {
     return kaplan_heap_size(base) == 0;
+}
+
+static int kaplan_heap_check_node_list(
+    const struct kaplan_heap *heap,
+    const struct kaplan_heap_node *node,
+    const struct kaplan_heap_node *parent,
+    size_t *count
+)
+{
+    const struct kaplan_heap_node *current = node;
+
+    while (current != NULL) {
+        void *owner;
+
+        if (current->parent != parent)
+            return -1;
+        if (current->before != NULL && current->before->after != current)
+            return -1;
+        if (current->after != NULL && current->after->before != current)
+            return -1;
+        if (parent != NULL && current->before == NULL && parent->child != current)
+            return -1;
+        if (
+            parent != NULL &&
+            heap->base.cmp(current->item, parent->item) < 0
+            )
+            return -1;
+
+        if (current->has_handle) {
+            if (heapx_handle_resolve(&heap->base, current->handle, &owner) != 0)
+                return -1;
+            if (owner != current)
+                return -1;
+        }
+
+        (*count)++;
+        if (kaplan_heap_check_node_list(heap, current->child, current, count) != 0)
+            return -1;
+
+        current = current->after;
+    }
+
+    return 0;
+}
+
+static int kaplan_heap_check_invariants(const struct heapx_heap *base)
+{
+    const struct kaplan_heap *heap = kaplan_heap_from_const_base(base);
+    size_t count = 0;
+
+    if (heap->size == 0)
+        return heap->root == NULL ? 0 : -1;
+    if (heap->root == NULL)
+        return -1;
+    if (heap->root->parent != NULL || heap->root->before != NULL)
+        return -1;
+
+    if (kaplan_heap_check_node_list(heap, heap->root, NULL, &count) != 0)
+        return -1;
+
+    return count == heap->size ? 0 : -1;
 }

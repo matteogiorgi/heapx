@@ -9,7 +9,7 @@ The repository contains:
 
 - a public C API based on the opaque `struct heapx_heap` type;
 - binary min-heap, Fibonacci heap, and Kaplan heap implementations;
-- C tests and a DIMACS-backed Dijkstra benchmark;
+- C tests, internal invariant checks, and benchmarks;
 - generated C API documentation through Doxygen;
 - reference papers under `docs/papers/`.
 
@@ -50,6 +50,11 @@ The selected heap backend embeds the common base object as its first field and
 provides a private `heapx_vtable`. Public functions define common
 edge-case behavior, such as `NULL` heap handling, and dispatch to the selected
 heap implementation.
+
+Pointer-heavy backends use an internal fixed-size node pool for node wrappers.
+This keeps allocation behavior close to the heap algorithm being measured:
+removed nodes are recycled inside the backend, while caller-owned items remain
+outside heapx ownership.
 
 Available implementations are:
 
@@ -115,6 +120,25 @@ Run the C tests:
 make test
 ```
 
+Randomized tests use a deterministic seed by default. Override it with:
+
+```sh
+HEAPX_TEST_SEED=123 make test
+```
+
+Run the C tests with AddressSanitizer and UndefinedBehaviorSanitizer:
+
+```sh
+make sanitize
+```
+
+Run tests with internal invariant assertions enabled after mutating public
+operations:
+
+```sh
+make debug-checks
+```
+
 Build the generated C API reference:
 
 ```sh
@@ -123,7 +147,42 @@ make docs
 
 The generated HTML is written to `build/docs/html/`.
 
-Run the heap comparison benchmark on the default DIMACS graph:
+Run the heap-only microbenchmark, which measures API and heap behavior without
+graph traversal costs:
+
+```sh
+make benchmark-heap
+```
+
+The heap-only benchmark reports separate scenarios for insert-only, first
+extract-min, full insert/extract drain, decrease-key without drain,
+decrease-key plus drain, and mixed handle operations.
+
+Pass a different item count with `N=...`:
+
+```sh
+make benchmark-heap N=500000
+```
+
+Pass a deterministic benchmark seed with `SEED=...`:
+
+```sh
+make benchmark-heap N=500000 SEED=123
+```
+
+Run the quick heap-only benchmark used by CI:
+
+```sh
+make benchmark-heap-smoke
+```
+
+Emit tab-separated benchmark output for comparing runs:
+
+```sh
+make benchmark-heap FORMAT=tsv N=500000 SEED=123
+```
+
+Run the Dijkstra heap comparison benchmark on the default DIMACS graph:
 
 ```sh
 make benchmark-smoke
@@ -143,14 +202,15 @@ make clean
 
 ## Graph Datasets
 
-DIMACS graph files are local benchmark inputs for comparing heap backends and
-are ignored by git. Place `.gr` files under `graphs/dimacs/`.
-
-The default smoke benchmark expects:
+DIMACS graph files are benchmark inputs for comparing heap backends. The repo
+includes a tiny versioned smoke-test graph:
 
 ```text
-graphs/dimacs/USA-road-d.NY.gr
+graphs/dimacs/tiny.gr
 ```
+
+Downloaded `.gr` files are ignored by git. Place larger local datasets under
+`graphs/dimacs/` and pass them through `GRAPH=...`.
 
 Large datasets, such as `USA-road-d.USA.gr`, should remain local files rather
 than committed repository content.
@@ -188,16 +248,25 @@ the current API for all heap backends:
 
 The targeted operations `decrease_key` and `remove` use handles returned by
 `insert_handle`, matching the usual heap assumption that the item's position is
-known. `contains` remains a pointer-identity convenience query and is linear in
-the current backends.
+known.
+
+Handles are generational value tokens. A handle records the logical id of the
+heap that created it, plus an internal slot and generation. A handle is live
+while its item remains stored in that heap. After `heapx_extract_min()` or
+`heapx_remove()` removes the item, the handle becomes non-live; passing it back
+to `heapx_decrease_key()` or `heapx_remove()` fails cleanly. Internal slot
+generations keep stale handles from becoming valid again after slot reuse.
+
+`contains` remains a pointer-identity convenience query and is linear in the
+current backends. It is intentionally separated from heap-native performance
+claims: benchmark results for the heap backends should be read through
+`insert`, `insert_handle`, `decrease_key`, `remove`, `peek_min`, and
+`extract_min`, not through `contains`.
 
 ## Roadmap
 
 The next planned work keeps the repository centered on heaps:
 
-- add focused correctness and sanitizer targets to the build;
-- add a small versioned DIMACS graph for reproducible benchmark smoke tests;
-- broaden randomized tests that compare all heap backends against a simple
-  reference model;
+- broaden randomized tests with longer runs;
 - evaluate whether a future heap-native public API should wrap or replace the
   current `heapx_*` API.

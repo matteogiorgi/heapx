@@ -2,6 +2,11 @@
 #define HEAPX_HEAP_INTERNAL_H
 
 #include <stddef.h>
+#include <stdint.h>
+
+#ifdef HEAPX_ENABLE_INTERNAL_CHECKS
+#include <assert.h>
+#endif
 
 #include "heapx/heap.h"
 
@@ -41,29 +46,34 @@
  * before dispatching through this table.
  *
  * Vtable functions may assume their heap argument is non-NULL and points to
- * the correct concrete object. They should preserve the public ownership
- * contract: stored items remain caller-owned, and destroy callbacks release
- * only backend-owned storage.
+ * the correct concrete object. Targeted-operation callbacks receive the
+ * already validated backend owner pointer associated with a live generational
+ * handle. They should preserve the public ownership contract: stored items
+ * remain caller-owned, and destroy callbacks release only backend-owned storage
+ * inside the concrete heap object. The common dispatch layer releases the
+ * handle slot table and the concrete heap allocation itself after the destroy
+ * callback returns.
  */
 struct heapx_vtable {
     /** Release backend-owned storage. The heap pointer is never NULL here. */
     void (*destroy)(struct heapx_heap *heap);
     /** Insert an item into a valid heap. */
     int (*insert)(struct heapx_heap *heap, void *item);
-    /** Insert an item and return its backend-owned handle. */
-    struct heapx_handle *(*insert_handle)(
+    /** Insert an item and return its generational handle through out. */
+    int (*insert_handle)(
         struct heapx_heap *heap,
-        void *item
+        void *item,
+        struct heapx_handle *out
     );
     /** Repair heap order after a stored item moves closer to the minimum. */
     int (*decrease_key)(
         struct heapx_heap *heap,
-        struct heapx_handle *handle
+        void *owner
     );
     /** Remove one stored item by handle and return the item pointer. */
     void *(*remove)(
         struct heapx_heap *heap,
-        struct heapx_handle *handle
+        void *owner
     );
     /** Return non-zero if the heap stores item by pointer identity. */
     int (*contains)(const struct heapx_heap *heap, const void *item);
@@ -75,6 +85,8 @@ struct heapx_vtable {
     size_t(*size)(const struct heapx_heap *heap);
     /** Return non-zero if a valid heap is empty. */
     int (*empty)(const struct heapx_heap *heap);
+    /** Return 0 when backend invariants hold, non-zero otherwise. */
+    int (*check_invariants)(const struct heapx_heap *heap);
 };
 
 /**
@@ -92,20 +104,56 @@ struct heapx_heap {
     const struct heapx_vtable *vtable;
     /** Comparator shared by the public wrapper and backend implementation. */
     heapx_cmp_fn cmp;
+    /** Logical heap identifier used by public generational handles. */
+    uint64_t id;
+    /** Generational handle slots for targeted operations. */
+    struct heapx_handle_slot *handle_slots;
+    /** Number of allocated handle slots. */
+    size_t handle_slot_count;
+    /** Capacity of the handle slot table. */
+    size_t handle_slot_capacity;
+    /** Head of the free-slot list, or SIZE_MAX if empty. */
+    size_t free_handle_slot;
 };
 
 /**
- * @brief Common header embedded in every backend-specific item handle.
+ * @brief Internal slot backing a public generational handle.
  *
- * Backends may embed this as the first field of a node or of a separate handle
- * object. The public API uses it to validate that a live handle belongs to the
- * heap passed to a targeted operation.
+ * Slots are reused through a free list. The generation is incremented whenever
+ * a live slot is released, so stale handles cannot refer to a future item that
+ * happens to reuse the same slot index.
  */
-struct heapx_handle {
-    /** Heap that owns this handle while it is live. */
-    struct heapx_heap *heap;
-    /** Caller-owned item pointer associated with this handle. */
+struct heapx_handle_slot {
+    /** Caller-owned item pointer associated with this handle while live. */
     void *item;
+    /** Backend-owned node or slot object while live. */
+    void *owner;
+    /** Current slot generation. */
+    unsigned generation;
+    /** Non-zero while the associated item remains stored in the heap. */
+    int live;
+    /** Next slot in the free list when not live. */
+    size_t next_free;
+};
+
+struct heapx_pool_block;
+
+/**
+ * @brief Fixed-size object pool used by pointer-heavy heap backends.
+ *
+ * The pool owns blocks of same-sized objects and recycles released objects
+ * through an intrusive free list. It is intended for backend node wrappers, not
+ * caller-owned heap items.
+ */
+struct heapx_node_pool {
+    /** Size of each object slot, including internal alignment padding. */
+    size_t object_size;
+    /** Number of object slots allocated per block. */
+    size_t block_capacity;
+    /** Head of the free-object list. */
+    void *free_list;
+    /** List of allocated blocks owned by the pool. */
+    struct heapx_pool_block *blocks;
 };
 
 /**
@@ -127,14 +175,54 @@ void heapx_heap_init(
     heapx_cmp_fn cmp
 );
 
-/**
- * @brief Initialize a backend-owned handle for a stored item.
- */
-void heapx_handle_init(
-    struct heapx_handle *handle,
+/** @brief Allocate or reuse a slot and create a public generational handle. */
+int heapx_handle_attach(
     struct heapx_heap *heap,
-    void *item
+    void *item,
+    void *owner,
+    struct heapx_handle *out
 );
+
+/** @brief Release the handle slot table owned by heap. */
+void heapx_heap_destroy_handle_slots(struct heapx_heap *heap);
+
+/** @brief Resolve a public handle to its live backend owner. */
+int heapx_handle_resolve(
+    const struct heapx_heap *heap,
+    struct heapx_handle handle,
+    void **owner
+);
+
+/** @brief Release the live slot identified by handle. */
+void heapx_handle_release(struct heapx_heap *heap, struct heapx_handle handle);
+
+/** @brief Initialize a fixed-size node pool. */
+int heapx_node_pool_init(
+    struct heapx_node_pool *pool,
+    size_t object_size,
+    size_t block_capacity
+);
+
+/** @brief Release every block owned by pool. */
+void heapx_node_pool_destroy(struct heapx_node_pool *pool);
+
+/** @brief Allocate one object from pool. */
+void *heapx_node_pool_alloc(struct heapx_node_pool *pool);
+
+/** @brief Return one object to pool for future reuse. */
+void heapx_node_pool_free(struct heapx_node_pool *pool, void *object);
+
+/** @brief Return 0 when common and backend invariants hold. */
+int heapx_check_invariants(const struct heapx_heap *heap);
+
+#ifdef HEAPX_ENABLE_INTERNAL_CHECKS
+/** @brief Assert common and backend invariants in debug-check builds. */
+#define HEAPX_ASSERT_INVARIANTS(heap) \
+    assert(heapx_check_invariants((heap)) == 0)
+#else
+/** @brief No-op invariant assertion for normal builds. */
+#define HEAPX_ASSERT_INVARIANTS(heap) ((void)(heap))
+#endif
 
 /** @} */
 

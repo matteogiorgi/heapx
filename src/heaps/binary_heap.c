@@ -7,7 +7,7 @@
  * @file binary_heap.c
  * @brief Binary min-heap backend for the abstract heapx_heap API.
  *
- * The backend stores backend-owned handles in a contiguous array. Parent
+ * The backend stores entries with public handles in a contiguous array. Parent
  * and child positions follow the usual zero-based binary heap layout:
  * parent `(i - 1) / 2`, left child `2 * i + 1`, right child `2 * i + 2`.
  *
@@ -30,7 +30,7 @@
 struct binary_heap {
     /** Common heapx_heap base. Must be the first field. */
     struct heapx_heap base;
-    /** Contiguous array of stored handles. */
+    /** Contiguous array of stored entries. */
     struct binary_heap_handle **data;
     /** Number of items currently stored. */
     size_t size;
@@ -38,27 +38,32 @@ struct binary_heap {
     size_t capacity;
 };
 
-/** @brief Backend-specific handle for an item stored in a binary heap. */
+/** @brief Backend-specific entry for an item stored in a binary heap. */
 struct binary_heap_handle {
-    /** Common public handle header. Must be the first field. */
-    struct heapx_handle base;
+    /** Public generational handle associated with this entry. */
+    struct heapx_handle handle;
+    /** Non-zero when handle was requested by the caller. */
+    int has_handle;
+    /** Caller-owned item pointer stored in this entry. */
+    void *item;
     /** Current array position, updated whenever handles are swapped. */
     size_t index;
 };
 
 static void binary_heap_destroy(struct heapx_heap *base);
 static int binary_heap_insert(struct heapx_heap *base, void *item);
-static struct heapx_handle *binary_heap_insert_handle(
+static int binary_heap_insert_handle(
     struct heapx_heap *base,
-    void *item
+    void *item,
+    struct heapx_handle *out
 );
 static int binary_heap_decrease_key(
     struct heapx_heap *base,
-    struct heapx_handle *handle
+    void *owner
 );
 static void *binary_heap_remove(
     struct heapx_heap *base,
-    struct heapx_handle *handle
+    void *owner
 );
 static int binary_heap_contains(
     const struct heapx_heap *base,
@@ -68,6 +73,7 @@ static void *binary_heap_peek_min(const struct heapx_heap *base);
 static void *binary_heap_extract_min(struct heapx_heap *base);
 static size_t binary_heap_size(const struct heapx_heap *base);
 static int binary_heap_empty(const struct heapx_heap *base);
+static int binary_heap_check_invariants(const struct heapx_heap *base);
 
 /** @brief Static vtable exposed through the common heapx_heap base. */
 static const struct heapx_vtable binary_heap_vtable = {
@@ -80,7 +86,8 @@ static const struct heapx_vtable binary_heap_vtable = {
     binary_heap_peek_min,
     binary_heap_extract_min,
     binary_heap_size,
-    binary_heap_empty
+    binary_heap_empty,
+    binary_heap_check_invariants
 };
 
 /**
@@ -100,14 +107,6 @@ static const struct binary_heap *binary_heap_from_const_base(
 )
 {
     return (const struct binary_heap *)base;
-}
-
-/** @brief Recover the binary-heap handle from the common handle pointer. */
-static struct binary_heap_handle *binary_heap_handle_from_handle(
-    struct heapx_handle *handle
-)
-{
-    return (struct binary_heap_handle *)handle;
 }
 
 /** @brief Swap two handle slots in the heap storage. */
@@ -133,8 +132,8 @@ static void binary_heap_sift_up(struct binary_heap *heap, size_t index)
 
         if (
             heap->base.cmp(
-                heap->data[index]->base.item,
-                heap->data[parent]->base.item
+                heap->data[index]->item,
+                heap->data[parent]->item
             ) >= 0
             )
             break;
@@ -161,8 +160,8 @@ static void binary_heap_sift_down(struct binary_heap *heap, size_t index)
         if (
             left < heap->size &&
             heap->base.cmp(
-                heap->data[left]->base.item,
-                heap->data[smallest]->base.item
+                heap->data[left]->item,
+                heap->data[smallest]->item
             ) < 0
             )
             smallest = left;
@@ -170,8 +169,8 @@ static void binary_heap_sift_down(struct binary_heap *heap, size_t index)
         if (
             right < heap->size &&
             heap->base.cmp(
-                heap->data[right]->base.item,
-                heap->data[smallest]->base.item
+                heap->data[right]->item,
+                heap->data[smallest]->item
             ) < 0
             )
             smallest = right;
@@ -221,7 +220,7 @@ static int binary_heap_find_index(
     size_t i;
 
     for (i = 0; i < heap->size; i++) {
-        if (heap->data[i]->base.item == item) {
+        if (heap->data[i]->item == item) {
             *index = i;
             return 0;
         }
@@ -238,8 +237,8 @@ static void binary_heap_repair_at(struct binary_heap *heap, size_t index)
     if (
         index > 0 &&
         heap->base.cmp(
-            heap->data[index]->base.item,
-            heap->data[(index - 1) / 2]->base.item
+            heap->data[index]->item,
+            heap->data[(index - 1) / 2]->item
         ) < 0
         ) {
         binary_heap_sift_up(heap, index);
@@ -278,7 +277,6 @@ static void binary_heap_destroy(struct heapx_heap *base)
     for (i = 0; i < heap->size; i++)
         free(heap->data[i]);
     free(heap->data);
-    free(heap);
 }
 
 /**
@@ -287,46 +285,61 @@ static void binary_heap_destroy(struct heapx_heap *base)
  * The item is first appended at the end of the occupied array and then moved
  * toward the root until the binary heap invariant holds again.
  */
+static int binary_heap_insert_entry(
+    struct heapx_heap *base,
+    void *item,
+    struct heapx_handle *out
+)
+{
+    struct binary_heap *heap = binary_heap_from_base(base);
+    struct binary_heap_handle *entry;
+    size_t new_capacity;
+
+    if (heap->size == heap->capacity) {
+        new_capacity = heap->capacity == 0 ? 8 : heap->capacity * 2;
+        if (new_capacity < heap->capacity)
+            return -1;
+        if (binary_heap_reserve(heap, new_capacity) != 0)
+            return -1;
+    }
+
+    entry = malloc(sizeof(*entry));
+    if (entry == NULL)
+        return -1;
+
+    entry->has_handle = out != NULL;
+    if (out != NULL) {
+        if (heapx_handle_attach(base, item, entry, out) != 0) {
+            free(entry);
+            return -1;
+        }
+        entry->handle = *out;
+    }
+
+    entry->item = item;
+    entry->index = heap->size;
+    heap->data[heap->size] = entry;
+    binary_heap_sift_up(heap, heap->size);
+    heap->size++;
+
+    return 0;
+}
+
 static int binary_heap_insert(struct heapx_heap *base, void *item)
 {
-    return binary_heap_insert_handle(base, item) == NULL ? -1 : 0;
+    return binary_heap_insert_entry(base, item, NULL);
 }
 
 /**
  * @brief Insert an item and return its handle.
  */
-static struct heapx_handle *binary_heap_insert_handle(
+static int binary_heap_insert_handle(
     struct heapx_heap *base,
-    void *item
+    void *item,
+    struct heapx_handle *out
 )
 {
-    struct binary_heap *heap = binary_heap_from_base(base);
-    struct binary_heap_handle *handle;
-    size_t new_capacity;
-
-    handle = malloc(sizeof(*handle));
-    if (handle == NULL)
-        return NULL;
-
-    if (heap->size == heap->capacity) {
-        new_capacity = heap->capacity == 0 ? 8 : heap->capacity * 2;
-        if (new_capacity < heap->capacity) {
-            free(handle);
-            return NULL;
-        }
-        if (binary_heap_reserve(heap, new_capacity) != 0) {
-            free(handle);
-            return NULL;
-        }
-    }
-
-    heapx_handle_init(&handle->base, base, item);
-    handle->index = heap->size;
-    heap->data[heap->size] = handle;
-    binary_heap_sift_up(heap, heap->size);
-    heap->size++;
-
-    return &handle->base;
+    return binary_heap_insert_entry(base, item, out);
 }
 
 /**
@@ -334,14 +347,13 @@ static struct heapx_handle *binary_heap_insert_handle(
  */
 static int binary_heap_decrease_key(
     struct heapx_heap *base,
-    struct heapx_handle *handle
+    void *owner
 )
 {
     struct binary_heap *heap = binary_heap_from_base(base);
-    struct binary_heap_handle *binary_handle =
-        binary_heap_handle_from_handle(handle);
+    struct binary_heap_handle *entry = owner;
 
-    binary_heap_sift_up(heap, binary_handle->index);
+    binary_heap_sift_up(heap, entry->index);
     return 0;
 }
 
@@ -350,16 +362,16 @@ static int binary_heap_decrease_key(
  */
 static void *binary_heap_remove(
     struct heapx_heap *base,
-    struct heapx_handle *handle
+    void *owner
 )
 {
     struct binary_heap *heap = binary_heap_from_base(base);
-    struct binary_heap_handle *binary_handle =
-        binary_heap_handle_from_handle(handle);
-    size_t index = binary_handle->index;
-    void *item = handle->item;
+    struct binary_heap_handle *entry = owner;
+    size_t index = entry->index;
+    void *item = entry->item;
 
-    handle->heap = NULL;
+    if (entry->has_handle)
+        heapx_handle_release(base, entry->handle);
 
     heap->size--;
     if (index != heap->size) {
@@ -368,7 +380,7 @@ static void *binary_heap_remove(
         binary_heap_repair_at(heap, index);
     }
 
-    free(binary_handle);
+    free(entry);
     return item;
 }
 
@@ -394,7 +406,7 @@ static void *binary_heap_peek_min(const struct heapx_heap *base)
     if (heap->size == 0)
         return NULL;
 
-    return heap->data[0]->base.item;
+    return heap->data[0]->item;
 }
 
 /**
@@ -406,15 +418,16 @@ static void *binary_heap_peek_min(const struct heapx_heap *base)
 static void *binary_heap_extract_min(struct heapx_heap *base)
 {
     struct binary_heap *heap = binary_heap_from_base(base);
-    struct binary_heap_handle *handle;
+    struct binary_heap_handle *entry;
     void *item;
 
     if (heap->size == 0)
         return NULL;
 
-    handle = heap->data[0];
-    item = handle->base.item;
-    handle->base.heap = NULL;
+    entry = heap->data[0];
+    item = entry->item;
+    if (entry->has_handle)
+        heapx_handle_release(base, entry->handle);
     heap->size--;
 
     if (heap->size > 0) {
@@ -423,7 +436,7 @@ static void *binary_heap_extract_min(struct heapx_heap *base)
         binary_heap_sift_down(heap, 0);
     }
 
-    free(handle);
+    free(entry);
     return item;
 }
 
@@ -437,4 +450,49 @@ static size_t binary_heap_size(const struct heapx_heap *base)
 static int binary_heap_empty(const struct heapx_heap *base)
 {
     return binary_heap_size(base) == 0;
+}
+
+static int binary_heap_check_invariants(const struct heapx_heap *base)
+{
+    const struct binary_heap *heap = binary_heap_from_const_base(base);
+    size_t i;
+
+    if (heap->size > heap->capacity)
+        return -1;
+    if (heap->capacity == 0 && heap->data != NULL)
+        return -1;
+    if (heap->capacity > 0 && heap->data == NULL)
+        return -1;
+
+    for (i = 0; i < heap->size; i++) {
+        const struct binary_heap_handle *entry = heap->data[i];
+        size_t left = 2 * i + 1;
+        size_t right = left + 1;
+        void *owner;
+
+        if (entry == NULL)
+            return -1;
+        if (entry->index != i)
+            return -1;
+
+        if (entry->has_handle) {
+            if (heapx_handle_resolve(base, entry->handle, &owner) != 0)
+                return -1;
+            if (owner != entry)
+                return -1;
+        }
+
+        if (
+            left < heap->size &&
+            heap->base.cmp(heap->data[left]->item, entry->item) < 0
+            )
+            return -1;
+        if (
+            right < heap->size &&
+            heap->base.cmp(heap->data[right]->item, entry->item) < 0
+            )
+            return -1;
+    }
+
+    return 0;
 }

@@ -26,8 +26,12 @@
  * A node with parent == NULL is in the root list.
  */
 struct fibonacci_heap_node {
-    /** Common public handle header. Must be the first field. */
+    /** Public generational handle associated with this node. */
     struct heapx_handle handle;
+    /** Non-zero when handle was requested by the caller. */
+    int has_handle;
+    /** Caller-owned item pointer stored in this node. */
+    void *item;
     /** Parent node, or NULL when the node is a root. */
     struct fibonacci_heap_node *parent;
     /** One child in the circular child list, or NULL. */
@@ -56,21 +60,28 @@ struct fibonacci_heap {
     struct fibonacci_heap_node *minimum;
     /** Number of stored items. */
     size_t size;
+    /** Pool used for node wrappers. */
+    struct heapx_node_pool nodes;
+    /** Reusable consolidation table indexed by degree. */
+    struct fibonacci_heap_node **degree_table;
+    /** Capacity of degree_table. */
+    size_t degree_table_capacity;
 };
 
 static void fibonacci_heap_destroy(struct heapx_heap *base);
 static int fibonacci_heap_insert(struct heapx_heap *base, void *item);
-static struct heapx_handle *fibonacci_heap_insert_handle(
+static int fibonacci_heap_insert_handle(
     struct heapx_heap *base,
-    void *item
+    void *item,
+    struct heapx_handle *out
 );
 static int fibonacci_heap_decrease_key(
     struct heapx_heap *base,
-    struct heapx_handle *handle
+    void *owner
 );
 static void *fibonacci_heap_remove(
     struct heapx_heap *base,
-    struct heapx_handle *handle
+    void *owner
 );
 static int fibonacci_heap_contains(
     const struct heapx_heap *base,
@@ -80,6 +91,7 @@ static void *fibonacci_heap_peek_min(const struct heapx_heap *base);
 static void *fibonacci_heap_extract_min(struct heapx_heap *base);
 static size_t fibonacci_heap_size(const struct heapx_heap *base);
 static int fibonacci_heap_empty(const struct heapx_heap *base);
+static int fibonacci_heap_check_invariants(const struct heapx_heap *base);
 
 /** @brief Static vtable exposed through the common heapx_heap base. */
 static const struct heapx_vtable fibonacci_heap_vtable = {
@@ -92,7 +104,8 @@ static const struct heapx_vtable fibonacci_heap_vtable = {
     fibonacci_heap_peek_min,
     fibonacci_heap_extract_min,
     fibonacci_heap_size,
-    fibonacci_heap_empty
+    fibonacci_heap_empty,
+    fibonacci_heap_check_invariants
 };
 
 /** @brief Recover the concrete heap object from the abstract base pointer. */
@@ -111,24 +124,20 @@ static const struct fibonacci_heap *fibonacci_heap_from_const_base(
     return (const struct fibonacci_heap *)base;
 }
 
-/** @brief Recover a Fibonacci heap node from its public handle pointer. */
-static struct fibonacci_heap_node *fibonacci_heap_node_from_handle(
-    struct heapx_handle *handle
-)
-{
-    return (struct fibonacci_heap_node *)handle;
-}
-
 /** @brief Allocate and initialize a Fibonacci heap node. */
-static struct fibonacci_heap_node *fibonacci_heap_node_create(void *item)
+static struct fibonacci_heap_node *fibonacci_heap_node_create(
+    struct fibonacci_heap *heap,
+    void *item
+)
 {
     struct fibonacci_heap_node *node;
 
-    node = malloc(sizeof(*node));
+    node = heapx_node_pool_alloc(&heap->nodes);
     if (node == NULL)
         return NULL;
 
-    heapx_handle_init(&node->handle, NULL, item);
+    node->has_handle = 0;
+    node->item = item;
     node->parent = NULL;
     node->child = NULL;
     node->left = node;
@@ -137,6 +146,15 @@ static struct fibonacci_heap_node *fibonacci_heap_node_create(void *item)
     node->marked = 0;
 
     return node;
+}
+
+/** @brief Return a node wrapper to the heap's node pool. */
+static void fibonacci_heap_node_destroy(
+    struct fibonacci_heap *heap,
+    struct fibonacci_heap_node *node
+)
+{
+    heapx_node_pool_free(&heap->nodes, node);
 }
 
 /** @brief Insert node into a circular list immediately after position. */
@@ -187,7 +205,7 @@ static void fibonacci_heap_add_root(
     }
 
     fibonacci_heap_list_insert_after(heap->minimum, node);
-    if (heap->base.cmp(node->handle.item, heap->minimum->handle.item) < 0)
+    if (heap->base.cmp(node->item, heap->minimum->item) < 0)
         heap->minimum = node;
 }
 
@@ -315,13 +333,37 @@ static void fibonacci_heap_update_minimum(struct fibonacci_heap *heap)
     while (current != start) {
         if (
             heap->base.cmp(
-                current->handle.item,
-                heap->minimum->handle.item
+                current->item,
+                heap->minimum->item
             ) < 0
             )
             heap->minimum = current;
         current = current->right;
     }
+}
+
+/** @brief Ensure the reusable consolidation table can store capacity slots. */
+static int fibonacci_heap_reserve_degree_table(
+    struct fibonacci_heap *heap,
+    size_t capacity
+)
+{
+    struct fibonacci_heap_node **table;
+    size_t i;
+
+    if (capacity <= heap->degree_table_capacity)
+        return 0;
+
+    table = realloc(heap->degree_table, capacity * sizeof(*table));
+    if (table == NULL)
+        return -1;
+
+    heap->degree_table = table;
+    for (i = heap->degree_table_capacity; i < capacity; i++)
+        heap->degree_table[i] = NULL;
+
+    heap->degree_table_capacity = capacity;
+    return 0;
 }
 
 /**
@@ -336,15 +378,18 @@ static void fibonacci_heap_update_minimum(struct fibonacci_heap *heap)
  *
  * The temporary roots array snapshots the original circular root list before
  * any links are performed. That keeps traversal independent from the mutations
- * performed while consolidating.
+ * performed while consolidating. The degree table itself is reused across
+ * extract-min calls and is sized by the degrees that can actually occur in this
+ * consolidation, not by the total heap size.
  */
 static void fibonacci_heap_consolidate(struct fibonacci_heap *heap)
 {
     struct fibonacci_heap_node **roots;
-    struct fibonacci_heap_node **by_degree;
     struct fibonacci_heap_node *current;
     size_t root_count;
     size_t degree_capacity;
+    size_t max_degree = 0;
+    size_t max_degree_seen = 0;
     size_t i;
 
     root_count = fibonacci_heap_list_count(heap->minimum);
@@ -357,18 +402,25 @@ static void fibonacci_heap_consolidate(struct fibonacci_heap *heap)
         return;
     }
 
-    degree_capacity = heap->size + 1;
-    by_degree = calloc(degree_capacity, sizeof(*by_degree));
-    if (by_degree == NULL) {
+    current = heap->minimum;
+    for (i = 0; i < root_count; i++) {
+        roots[i] = current;
+        if (current->degree > max_degree)
+            max_degree = current->degree;
+        current = current->right;
+    }
+
+    if (max_degree > (size_t)-1 - root_count - 1) {
         free(roots);
         fibonacci_heap_update_minimum(heap);
         return;
     }
 
-    current = heap->minimum;
-    for (i = 0; i < root_count; i++) {
-        roots[i] = current;
-        current = current->right;
+    degree_capacity = max_degree + root_count + 1;
+    if (fibonacci_heap_reserve_degree_table(heap, degree_capacity) != 0) {
+        free(roots);
+        fibonacci_heap_update_minimum(heap);
+        return;
     }
 
     for (i = 0; i < root_count; i++) {
@@ -381,56 +433,32 @@ static void fibonacci_heap_consolidate(struct fibonacci_heap *heap)
         struct fibonacci_heap_node *node = roots[i];
         size_t degree = node->degree;
 
-        while (by_degree[degree] != NULL) {
-            struct fibonacci_heap_node *other = by_degree[degree];
+        while (heap->degree_table[degree] != NULL) {
+            struct fibonacci_heap_node *other = heap->degree_table[degree];
 
-            if (heap->base.cmp(other->handle.item, node->handle.item) < 0) {
+            if (heap->base.cmp(other->item, node->item) < 0) {
                 struct fibonacci_heap_node *tmp = node;
                 node = other;
                 other = tmp;
             }
 
-            by_degree[degree] = NULL;
+            heap->degree_table[degree] = NULL;
             fibonacci_heap_link(other, node);
             degree = node->degree;
         }
 
-        by_degree[degree] = node;
+        heap->degree_table[degree] = node;
+        if (degree > max_degree_seen)
+            max_degree_seen = degree;
     }
 
-    for (i = 0; i < degree_capacity; i++) {
-        if (by_degree[i] != NULL)
-            fibonacci_heap_add_root(heap, by_degree[i]);
+    for (i = 0; i <= max_degree_seen; i++) {
+        if (heap->degree_table[i] != NULL)
+            fibonacci_heap_add_root(heap, heap->degree_table[i]);
+        heap->degree_table[i] = NULL;
     }
 
-    free(by_degree);
     free(roots);
-}
-
-/**
- * @brief Recursively release all nodes reachable from a circular list.
- *
- * The function counts the list before freeing nodes so traversal does not rely
- * on pointers after their owning node has been released.
- */
-static void fibonacci_heap_destroy_nodes(struct fibonacci_heap_node *node)
-{
-    struct fibonacci_heap_node *current;
-    struct fibonacci_heap_node *next;
-    size_t count;
-    size_t i;
-
-    if (node == NULL)
-        return;
-
-    count = fibonacci_heap_list_count(node);
-    current = node;
-    for (i = 0; i < count; i++) {
-        next = current->right;
-        fibonacci_heap_destroy_nodes(current->child);
-        free(current);
-        current = next;
-    }
 }
 
 /**
@@ -469,7 +497,7 @@ static struct fibonacci_heap_node *fibonacci_heap_find_node(
     for (i = 0; i < count; i++) {
         struct fibonacci_heap_node *found;
 
-        if (current->handle.item == item)
+        if (current->item == item)
             return current;
 
         found = fibonacci_heap_find_node(current->child, item);
@@ -493,17 +521,29 @@ struct heapx_heap *fibonacci_heap_create(heapx_cmp_fn cmp)
     heapx_heap_init(&heap->base, &fibonacci_heap_vtable, cmp);
     heap->minimum = NULL;
     heap->size = 0;
+    heap->degree_table = NULL;
+    heap->degree_table_capacity = 0;
+    if (
+        heapx_node_pool_init(
+            &heap->nodes,
+            sizeof(struct fibonacci_heap_node),
+            256
+        ) != 0
+        ) {
+        free(heap);
+        return NULL;
+    }
 
     return &heap->base;
 }
 
-/** @brief Release all Fibonacci-heap-owned nodes and the heap object. */
+/** @brief Release all Fibonacci-heap-owned node storage. */
 static void fibonacci_heap_destroy(struct heapx_heap *base)
 {
     struct fibonacci_heap *heap = fibonacci_heap_from_base(base);
 
-    fibonacci_heap_destroy_nodes(heap->minimum);
-    free(heap);
+    free(heap->degree_table);
+    heapx_node_pool_destroy(&heap->nodes);
 }
 
 /**
@@ -512,31 +552,49 @@ static void fibonacci_heap_destroy(struct heapx_heap *base)
  * Fibonacci heap insertion does not consolidate. It just links the new node
  * into the root list and updates the minimum pointer if necessary.
  */
-static int fibonacci_heap_insert(struct heapx_heap *base, void *item)
-{
-    return fibonacci_heap_insert_handle(base, item) == NULL ? -1 : 0;
-}
-
-/**
- * @brief Insert an item as a new singleton root and return its handle.
- */
-static struct heapx_handle *fibonacci_heap_insert_handle(
+static int fibonacci_heap_insert_node(
     struct heapx_heap *base,
-    void *item
+    void *item,
+    struct heapx_handle *out
 )
 {
     struct fibonacci_heap *heap = fibonacci_heap_from_base(base);
     struct fibonacci_heap_node *node;
 
-    node = fibonacci_heap_node_create(item);
+    node = fibonacci_heap_node_create(heap, item);
     if (node == NULL)
-        return NULL;
+        return -1;
 
-    node->handle.heap = base;
+    node->has_handle = out != NULL;
+    if (out != NULL) {
+        if (heapx_handle_attach(base, item, node, out) != 0) {
+            fibonacci_heap_node_destroy(heap, node);
+            return -1;
+        }
+        node->handle = *out;
+    }
+
     fibonacci_heap_add_root(heap, node);
     heap->size++;
 
-    return &node->handle;
+    return 0;
+}
+
+static int fibonacci_heap_insert(struct heapx_heap *base, void *item)
+{
+    return fibonacci_heap_insert_node(base, item, NULL);
+}
+
+/**
+ * @brief Insert an item as a new singleton root and return its handle.
+ */
+static int fibonacci_heap_insert_handle(
+    struct heapx_heap *base,
+    void *item,
+    struct heapx_handle *out
+)
+{
+    return fibonacci_heap_insert_node(base, item, out);
 }
 
 /**
@@ -547,24 +605,23 @@ static struct heapx_handle *fibonacci_heap_insert_handle(
  */
 static int fibonacci_heap_decrease_key(
     struct heapx_heap *base,
-    struct heapx_handle *handle
+    void *owner
 )
 {
     struct fibonacci_heap *heap = fibonacci_heap_from_base(base);
-    struct fibonacci_heap_node *node =
-        fibonacci_heap_node_from_handle(handle);
+    struct fibonacci_heap_node *node = owner;
     struct fibonacci_heap_node *parent;
 
     parent = node->parent;
     if (
         parent != NULL &&
-        heap->base.cmp(node->handle.item, parent->handle.item) < 0
+        heap->base.cmp(node->item, parent->item) < 0
         ) {
         fibonacci_heap_cut(heap, node, parent);
         fibonacci_heap_cascading_cut(heap, parent);
     }
 
-    if (heap->base.cmp(node->handle.item, heap->minimum->handle.item) < 0)
+    if (heap->base.cmp(node->item, heap->minimum->item) < 0)
         heap->minimum = node;
 
     return 0;
@@ -579,21 +636,21 @@ static int fibonacci_heap_decrease_key(
  */
 static void *fibonacci_heap_remove(
     struct heapx_heap *base,
-    struct heapx_handle *handle
+    void *owner
 )
 {
     struct fibonacci_heap *heap = fibonacci_heap_from_base(base);
-    struct fibonacci_heap_node *node =
-        fibonacci_heap_node_from_handle(handle);
+    struct fibonacci_heap_node *node = owner;
     struct fibonacci_heap_node *parent = node->parent;
-    void *item = handle->item;
-
-    handle->heap = NULL;
+    void *item = node->item;
 
     if (node == heap->minimum) {
         (void)fibonacci_heap_extract_min(base);
         return item;
     }
+
+    if (node->has_handle)
+        heapx_handle_release(base, node->handle);
 
     fibonacci_heap_promote_children(heap, node);
 
@@ -605,7 +662,7 @@ static void *fibonacci_heap_remove(
     }
 
     heap->size--;
-    free(node);
+    fibonacci_heap_node_destroy(heap, node);
     return item;
 }
 
@@ -632,7 +689,7 @@ static void *fibonacci_heap_peek_min(const struct heapx_heap *base)
     if (heap->minimum == NULL)
         return NULL;
 
-    return heap->minimum->handle.item;
+    return heap->minimum->item;
 }
 
 /**
@@ -655,8 +712,7 @@ static void *fibonacci_heap_extract_min(struct heapx_heap *base)
     if (minimum == NULL)
         return NULL;
 
-    item = minimum->handle.item;
-    minimum->handle.heap = NULL;
+    item = minimum->item;
 
     child_count = minimum->degree;
     for (i = 0; i < child_count; i++) {
@@ -677,7 +733,9 @@ static void *fibonacci_heap_extract_min(struct heapx_heap *base)
     if (heap->minimum != NULL)
         fibonacci_heap_consolidate(heap);
 
-    free(minimum);
+    if (minimum->has_handle)
+        heapx_handle_release(base, minimum->handle);
+    fibonacci_heap_node_destroy(heap, minimum);
     return item;
 }
 
@@ -691,4 +749,95 @@ static size_t fibonacci_heap_size(const struct heapx_heap *base)
 static int fibonacci_heap_empty(const struct heapx_heap *base)
 {
     return fibonacci_heap_size(base) == 0;
+}
+
+static int fibonacci_heap_check_node_list(
+    const struct fibonacci_heap *heap,
+    const struct fibonacci_heap_node *node,
+    const struct fibonacci_heap_node *parent,
+    size_t *count
+)
+{
+    const struct fibonacci_heap_node *current;
+    size_t list_count;
+    size_t i;
+
+    if (node == NULL)
+        return 0;
+
+    list_count = fibonacci_heap_list_count((struct fibonacci_heap_node *)node);
+    current = node;
+    for (i = 0; i < list_count; i++) {
+        void *owner;
+        size_t subtree_count = 0;
+        size_t child_count;
+
+        if (current == NULL)
+            return -1;
+        if (current->left == NULL || current->right == NULL)
+            return -1;
+        if (current->left->right != current || current->right->left != current)
+            return -1;
+        if (current->parent != parent)
+            return -1;
+        if (
+            parent != NULL &&
+            heap->base.cmp(current->item, parent->item) < 0
+            )
+            return -1;
+
+        if (current->has_handle) {
+            if (heapx_handle_resolve(&heap->base, current->handle, &owner) != 0)
+                return -1;
+            if (owner != current)
+                return -1;
+        }
+
+        child_count = fibonacci_heap_list_count(current->child);
+        if (
+            fibonacci_heap_check_node_list(
+                heap,
+                current->child,
+                current,
+                &subtree_count
+            ) != 0
+            )
+            return -1;
+        if (child_count != current->degree)
+            return -1;
+
+        *count += subtree_count + 1;
+        current = current->right;
+    }
+
+    return 0;
+}
+
+static int fibonacci_heap_check_invariants(const struct heapx_heap *base)
+{
+    const struct fibonacci_heap *heap = fibonacci_heap_from_const_base(base);
+    const struct fibonacci_heap_node *current;
+    size_t count = 0;
+    size_t root_count;
+    size_t i;
+
+    if (heap->size == 0)
+        return heap->minimum == NULL ? 0 : -1;
+    if (heap->minimum == NULL)
+        return -1;
+
+    root_count = fibonacci_heap_list_count(heap->minimum);
+    current = heap->minimum;
+    for (i = 0; i < root_count; i++) {
+        if (current->parent != NULL)
+            return -1;
+        if (heap->base.cmp(current->item, heap->minimum->item) < 0)
+            return -1;
+        current = current->right;
+    }
+
+    if (fibonacci_heap_check_node_list(heap, heap->minimum, NULL, &count) != 0)
+        return -1;
+
+    return count == heap->size ? 0 : -1;
 }

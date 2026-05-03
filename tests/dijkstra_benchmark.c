@@ -29,7 +29,8 @@ struct dijkstra_node {
     unsigned id;
     uint64_t distance;
     int finalized;
-    struct heapx_handle *handle;
+    int queued;
+    struct heapx_handle handle;
 };
 
 struct dijkstra_result {
@@ -303,7 +304,7 @@ static struct dijkstra_node *dijkstra_nodes_create(size_t node_count)
         nodes[i].id = (unsigned)i;
         nodes[i].distance = DIJKSTRA_INF;
         nodes[i].finalized = 0;
-        nodes[i].handle = NULL;
+        nodes[i].queued = 0;
     }
 
     return nodes;
@@ -358,9 +359,9 @@ static int run_dijkstra(
 
     memset(result, 0, sizeof(*result));
     nodes[source].distance = 0;
-    nodes[source].handle = heapx_insert_handle(heap, &nodes[source]);
-    if (nodes[source].handle == NULL)
+    if (heapx_insert_handle(heap, &nodes[source], &nodes[source].handle) != 0)
         goto done_heap;
+    nodes[source].queued = 1;
     result->inserts++;
 
     if (clock_gettime(CLOCK_MONOTONIC, &start) != 0)
@@ -372,7 +373,7 @@ static int run_dijkstra(
         size_t end_offset;
         size_t edge;
 
-        node->handle = NULL;
+        node->queued = 0;
         if (node->finalized)
             continue;
 
@@ -397,10 +398,16 @@ static int run_dijkstra(
                 continue;
 
             neighbor->distance = candidate;
-            if (neighbor->handle == NULL) {
-                neighbor->handle = heapx_insert_handle(heap, neighbor);
-                if (neighbor->handle == NULL)
+            if (!neighbor->queued) {
+                if (
+                    heapx_insert_handle(
+                        heap,
+                        neighbor,
+                        &neighbor->handle
+                    ) != 0
+                    )
                     goto done_heap;
+                neighbor->queued = 1;
                 result->inserts++;
             } else {
                 if (heapx_decrease_key(heap, neighbor->handle) != 0)

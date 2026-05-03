@@ -1,8 +1,8 @@
 # Graph Datasets
 
-This directory is reserved for local DIMACS shortest-path graph files used by
-manual heap-backend benchmark runs. Dataset files are intentionally ignored by
-git.
+This directory contains DIMACS shortest-path graph files used by heap-backend
+benchmark runs. Large downloaded dataset files are intentionally ignored by
+git, while `graphs/dimacs/tiny.gr` is versioned for reproducible smoke tests.
 
 The C Dijkstra benchmark reads `.gr` files with lines like:
 
@@ -18,7 +18,7 @@ Put downloaded files under `graphs/dimacs/`, then run:
 make benchmark GRAPH=graphs/dimacs/USA-road-d.NY.gr SOURCE=1
 ```
 
-The default smoke target uses `graphs/dimacs/USA-road-d.NY.gr`:
+The default smoke target uses `graphs/dimacs/tiny.gr`:
 
 ```sh
 make benchmark-smoke

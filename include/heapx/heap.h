@@ -2,6 +2,7 @@
 #define HEAPX_HEAP_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 /**
  * @file heap.h
@@ -66,26 +67,28 @@
  * follows the Fibonacci heap paper's assumption that decrease-key and arbitrary
  * deletion know the item's heap position.
  *
- * @section null_handles NULL Handles
+ * @section null_handles NULL And Invalid Handles
  *
- * Public functions define simple NULL-handle behavior:
+ * Public functions define simple NULL and invalid-handle behavior:
  *
  * - heapx_destroy() accepts NULL and does nothing;
  * - heapx_insert() returns -1 for a NULL heap;
- * - heapx_insert_handle() returns NULL for a NULL heap;
+ * - heapx_insert_handle() returns -1 for a NULL heap or NULL out pointer;
  * - heapx_peek_min() and heapx_extract_min() return NULL for a NULL
  *   heap;
  * - heapx_size() returns 0 for a NULL heap;
  * - heapx_empty() treats NULL as empty;
  * - heapx_decrease_key() returns -1 for a NULL heap;
- * - heapx_remove() returns NULL for a NULL heap.
+ * - heapx_decrease_key() returns -1 for stale or non-live handles;
+ * - heapx_remove() returns NULL for a NULL heap, stale handle, or non-live
+ *   handle.
  *
  * @section failures Allocation Failures
  *
- * Constructors return NULL when allocation fails. heapx_insert() returns
- * -1 when a backend cannot allocate the storage required for the new item.
- * heapx_insert_handle() returns NULL for the same condition. On a failed
- * insert, the item is not inserted and remains entirely caller-owned.
+ * Constructors return NULL when allocation fails. heapx_insert() and
+ * heapx_insert_handle() return -1 when a backend cannot allocate the storage
+ * required for the new item. On a failed insert, the item is not inserted and
+ * remains entirely caller-owned.
  *
  * @section example Example
  *
@@ -218,15 +221,27 @@ enum heapx_implementation {
 struct heapx_heap;
 
 /**
- * @brief Opaque handle for one item stored in a heap.
+ * @brief Generational handle for one item stored in a heap.
  *
- * Handles are returned by heapx_insert_handle(). They are valid only
- * while the associated item remains stored in the heap that created them. A
- * handle becomes invalid after the item is removed by heapx_extract_min(),
- * heapx_remove(), heapx_destroy(), or any future operation
- * that deletes that item.
+ * Handles are value tokens returned through heapx_insert_handle(). They do
+ * not own memory and callers may copy them freely. A handle is live only while
+ * its associated item remains stored in the heap that created it.
+ *
+ * A handle becomes non-live after the item is removed by heapx_extract_min(),
+ * heapx_remove(), or any future operation that deletes that item. Passing a
+ * non-live handle back to heapx_decrease_key() or heapx_remove() is allowed
+ * and fails cleanly. A logical heap identifier and slot generations prevent
+ * handles from one heap or stale handles from becoming valid after internal
+ * slot reuse.
  */
-struct heapx_handle;
+struct heapx_handle {
+    /** Logical identifier of the heap that created this handle. */
+    uint64_t heap_id;
+    /** Internal slot index in the creating heap's handle table. */
+    size_t slot;
+    /** Generation recorded when the handle was created. */
+    unsigned generation;
+};
 
 /**
  * @brief Create an empty heap backed by the selected heap implementation.
@@ -289,19 +304,25 @@ int heapx_insert(struct heapx_heap *heap, void *item);
 /**
  * @brief Insert an item and return a handle to its heap position.
  *
- * The returned handle can be used with heapx_decrease_key() and
- * heapx_remove(). Client code must not free the handle and must not
- * use it after the item leaves the heap.
+ * The output handle can be used with heapx_decrease_key() and heapx_remove()
+ * while the associated item remains stored in the heap. Handles are plain
+ * values and do not need to be freed.
+ *
+ * If the item later leaves the heap, the handle becomes non-live. Passing that
+ * non-live handle back to heapx_decrease_key() or heapx_remove() is allowed
+ * and returns failure.
  *
  * @param heap Heap receiving the item.
  * @param item Caller-owned item pointer to store.
- * @return A handle on success, or NULL if heap is NULL or allocation fails.
+ * @param out Receives the handle on success.
+ * @return 0 on success, or -1 if heap or out is NULL, or allocation fails.
  *
  * @post On success, heapx_size(heap) increases by one.
  */
-struct heapx_handle *heapx_insert_handle(
+int heapx_insert_handle(
     struct heapx_heap *heap,
-    void *item
+    void *item,
+    struct heapx_handle *out
 );
 
 /**
@@ -313,15 +334,15 @@ struct heapx_handle *heapx_insert_handle(
  *
  * @param heap Heap containing handle.
  * @param handle Handle returned by heapx_insert_handle().
- * @return 0 on success, or -1 if heap or handle is NULL, or if handle does not
- *         belong to heap.
+ * @return 0 on success, or -1 if heap is NULL, if handle is not valid for heap,
+ *         or if handle is no longer live.
  *
- * @warning Calling this after lowering an item's priority, or after mutating an
- *          item whose handle is invalid, does not restore heap order.
+ * @warning Calling this after lowering an item's priority does not restore
+ *          heap order.
  */
 int heapx_decrease_key(
     struct heapx_heap *heap,
-    struct heapx_handle *handle
+    struct heapx_handle handle
 );
 
 /**
@@ -331,8 +352,8 @@ int heapx_decrease_key(
  *
  * @param heap Heap to remove from.
  * @param handle Handle returned by heapx_insert_handle().
- * @return The removed item on success, or NULL if heap or handle is NULL, or
- *         if handle does not belong to heap.
+ * @return The removed item on success, or NULL if heap is NULL, if handle is
+ *         not valid for heap, or if handle is no longer live.
  *
  * @note If the stored item pointer itself is NULL, a successful remove also
  *       returns NULL. Use heapx_contains() or external bookkeeping if
@@ -341,7 +362,7 @@ int heapx_decrease_key(
  */
 void *heapx_remove(
     struct heapx_heap *heap,
-    struct heapx_handle *handle
+    struct heapx_handle handle
 );
 
 /**
