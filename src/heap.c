@@ -10,9 +10,12 @@
 
 static uint64_t heapx_next_heap_id = 1;
 
-struct heapx_pool_block {
-    struct heapx_pool_block *next;
-    long double alignment;
+union heapx_pool_block {
+    struct {
+        union heapx_pool_block *next;
+    } fields;
+    void *pointer_alignment;
+    long double long_double_alignment;
 };
 
 /**
@@ -204,10 +207,10 @@ int heapx_node_pool_init(
 
 void heapx_node_pool_destroy(struct heapx_node_pool *pool)
 {
-    struct heapx_pool_block *block = pool->blocks;
+    union heapx_pool_block *block = pool->blocks;
 
     while (block != NULL) {
-        struct heapx_pool_block *next = block->next;
+        union heapx_pool_block *next = block->fields.next;
 
         free(block);
         block = next;
@@ -221,7 +224,7 @@ void heapx_node_pool_destroy(struct heapx_node_pool *pool)
 
 static int heapx_node_pool_grow(struct heapx_node_pool *pool)
 {
-    struct heapx_pool_block *block;
+    union heapx_pool_block *block;
     unsigned char *data;
     size_t bytes;
     size_t i;
@@ -234,7 +237,7 @@ static int heapx_node_pool_grow(struct heapx_node_pool *pool)
     if (block == NULL)
         return -1;
 
-    block->next = pool->blocks;
+    block->fields.next = pool->blocks;
     pool->blocks = block;
 
     data = (unsigned char *)(block + 1);

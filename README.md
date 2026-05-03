@@ -56,6 +56,11 @@ This keeps allocation behavior close to the heap algorithm being measured:
 removed nodes are recycled inside the backend, while caller-owned items remain
 outside heapx ownership.
 
+heapx does not provide internal synchronization. Use one heap from one thread
+at a time, or protect heap creation, mutation, and destruction with external
+synchronization. The internal heap identifiers used for handle validation are
+process-local and are not updated atomically.
+
 Available implementations are:
 
 | C enum | Heap backend | Status |
@@ -124,6 +129,13 @@ Randomized tests use a deterministic seed by default. Override it with:
 
 ```sh
 HEAPX_TEST_SEED=123 make test
+```
+
+Longer randomized campaigns can also override the number of stored items and
+operation steps:
+
+```sh
+HEAPX_TEST_ITEMS=512 HEAPX_TEST_STEPS=20000 make test
 ```
 
 Run the C tests with AddressSanitizer and UndefinedBehaviorSanitizer:

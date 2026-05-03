@@ -136,7 +136,7 @@ struct heapx_handle_slot {
     size_t next_free;
 };
 
-struct heapx_pool_block;
+union heapx_pool_block;
 
 /**
  * @brief Fixed-size object pool used by pointer-heavy heap backends.
@@ -153,7 +153,7 @@ struct heapx_node_pool {
     /** Head of the free-object list. */
     void *free_list;
     /** List of allocated blocks owned by the pool. */
-    struct heapx_pool_block *blocks;
+    union heapx_pool_block *blocks;
 };
 
 /**

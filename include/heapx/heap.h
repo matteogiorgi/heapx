@@ -67,6 +67,14 @@
  * follows the Fibonacci heap paper's assumption that decrease-key and arbitrary
  * deletion know the item's heap position.
  *
+ * @section thread_safety Thread Safety
+ *
+ * heapx does not provide internal synchronization. Distinct heaps may be used
+ * independently by one thread at a time, but concurrent creation, mutation, or
+ * destruction from multiple threads requires external synchronization by the
+ * caller. In particular, the library uses internal process-local heap
+ * identifiers for handle validation and does not make those updates atomic.
+ *
  * @section null_handles NULL And Invalid Handles
  *
  * Public functions define simple NULL and invalid-handle behavior:
@@ -373,6 +381,8 @@ void *heapx_remove(
  * @return Non-zero if item is stored in heap, zero otherwise.
  *
  * @note Current backends implement this as a linear pointer-identity search.
+ *       It is intended as a convenience or diagnostic query, not as a
+ *       heap-native performance operation.
  */
 int heapx_contains(const struct heapx_heap *heap, const void *item);
 

@@ -638,6 +638,36 @@ static int kaplan_heap_empty(const struct heapx_heap *base)
     return kaplan_heap_size(base) == 0;
 }
 
+static int kaplan_heap_count_direct_children(
+    const struct kaplan_heap *heap,
+    const struct kaplan_heap_node *parent,
+    size_t *child_count
+)
+{
+    const struct kaplan_heap_node *child = parent->child;
+    size_t count = 0;
+
+    while (child != NULL) {
+        if (child->parent != parent)
+            return -1;
+        if (child->before == NULL && parent->child != child)
+            return -1;
+        if (child->before != NULL && child->before->after != child)
+            return -1;
+        if (child->after != NULL && child->after->before != child)
+            return -1;
+
+        count++;
+        if (count > heap->size)
+            return -1;
+
+        child = child->after;
+    }
+
+    *child_count = count;
+    return 0;
+}
+
 static int kaplan_heap_check_node_list(
     const struct kaplan_heap *heap,
     const struct kaplan_heap_node *node,
@@ -648,8 +678,11 @@ static int kaplan_heap_check_node_list(
     const struct kaplan_heap_node *current = node;
 
     while (current != NULL) {
+        size_t child_count;
         void *owner;
 
+        if (*count >= heap->size)
+            return -1;
         if (current->parent != parent)
             return -1;
         if (current->before != NULL && current->before->after != current)
@@ -657,6 +690,16 @@ static int kaplan_heap_check_node_list(
         if (current->after != NULL && current->after->before != current)
             return -1;
         if (parent != NULL && current->before == NULL && parent->child != current)
+            return -1;
+        if (current->child != NULL && current->child->before != NULL)
+            return -1;
+        if (current->marked != 0 && current->marked != 1)
+            return -1;
+        if (current->rank > heap->size)
+            return -1;
+        if (kaplan_heap_count_direct_children(heap, current, &child_count) != 0)
+            return -1;
+        if (current->rank > child_count)
             return -1;
         if (
             parent != NULL &&
@@ -685,12 +728,22 @@ static int kaplan_heap_check_invariants(const struct heapx_heap *base)
 {
     const struct kaplan_heap *heap = kaplan_heap_from_const_base(base);
     size_t count = 0;
+    size_t i;
+
+    for (i = 0; i < heap->rank_table_capacity; i++) {
+        if (heap->rank_table[i] != NULL)
+            return -1;
+    }
 
     if (heap->size == 0)
         return heap->root == NULL ? 0 : -1;
     if (heap->root == NULL)
         return -1;
-    if (heap->root->parent != NULL || heap->root->before != NULL)
+    if (
+        heap->root->parent != NULL ||
+        heap->root->before != NULL ||
+        heap->root->after != NULL
+        )
         return -1;
 
     if (kaplan_heap_check_node_list(heap, heap->root, NULL, &count) != 0)

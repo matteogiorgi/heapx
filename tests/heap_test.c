@@ -31,6 +31,25 @@ static unsigned test_seed_from_env(void)
     return (unsigned)parsed;
 }
 
+static size_t test_size_from_env(const char *name, size_t default_value)
+{
+    const char *text = getenv(name);
+    char *end;
+    unsigned long parsed;
+
+    if (text == NULL || *text == '\0')
+        return default_value;
+
+    errno = 0;
+    parsed = strtoul(text, &end, 0);
+    assert(errno == 0);
+    assert(*end == '\0');
+    assert(parsed > 0);
+    assert((unsigned long)(size_t)parsed == parsed);
+
+    return (size_t)parsed;
+}
+
 static int int_cmp(const void *lhs, const void *rhs)
 {
     const int *left = lhs;
@@ -600,31 +619,41 @@ static void test_randomized_against_oracle(
     unsigned base_seed
 )
 {
-    enum { ITEM_COUNT = 96, STEP_COUNT = 2500 };
+    size_t item_count = test_size_from_env("HEAPX_TEST_ITEMS", 96);
+    size_t step_count = test_size_from_env("HEAPX_TEST_STEPS", 2500);
     struct heapx_heap *heap;
-    struct keyed_value values[ITEM_COUNT];
-    struct heapx_handle handles[ITEM_COUNT];
-    int active[ITEM_COUNT];
+    struct keyed_value *values;
+    struct heapx_handle *handles;
+    int *active;
     unsigned random_state = base_seed + (unsigned)implementation;
     size_t i;
     size_t step;
 
+    assert(item_count <= (size_t)INT_MAX);
+
+    values = malloc(item_count * sizeof(*values));
+    handles = malloc(item_count * sizeof(*handles));
+    active = malloc(item_count * sizeof(*active));
+    assert(values != NULL);
+    assert(handles != NULL);
+    assert(active != NULL);
+
     heap = heapx_create(implementation, keyed_value_cmp);
     assert(heap != NULL);
 
-    for (i = 0; i < ITEM_COUNT; i++) {
+    for (i = 0; i < item_count; i++) {
         values[i].id = (int)i;
         values[i].priority = 0;
         active[i] = 0;
     }
 
-    for (step = 0; step < STEP_COUNT; step++) {
-        size_t active_count = count_active_items(active, ITEM_COUNT);
+    for (step = 0; step < step_count; step++) {
+        size_t active_count = count_active_items(active, item_count);
         unsigned choice = next_random(&random_state) % 100u;
         size_t index;
 
         if (active_count == 0 || choice < 35u) {
-            size_t inactive_count = ITEM_COUNT - active_count;
+            size_t inactive_count = item_count - active_count;
 
             if (inactive_count == 0)
                 continue;
@@ -632,7 +661,7 @@ static void test_randomized_against_oracle(
             assert(
                 select_nth_inactive_item(
                     active,
-                    ITEM_COUNT,
+                    item_count,
                     next_random(&random_state) % inactive_count,
                     &index
                 ) == 0
@@ -651,7 +680,7 @@ static void test_randomized_against_oracle(
             assert(
                 select_nth_active_item(
                     active,
-                    ITEM_COUNT,
+                    item_count,
                     next_random(&random_state) % active_count,
                     &index
                 ) == 0
@@ -665,7 +694,7 @@ static void test_randomized_against_oracle(
             assert(
                 select_nth_active_item(
                     active,
-                    ITEM_COUNT,
+                    item_count,
                     next_random(&random_state) % active_count,
                     &index
                 ) == 0
@@ -677,7 +706,7 @@ static void test_randomized_against_oracle(
             size_t min_index;
             struct keyed_value *extracted;
 
-            assert(find_min_active_item(values, active, ITEM_COUNT, &min_index) == 0);
+            assert(find_min_active_item(values, active, item_count, &min_index) == 0);
             extracted = heapx_extract_min(heap);
             assert(extracted != NULL);
             assert(extracted->priority == values[min_index].priority);
@@ -688,7 +717,7 @@ static void test_randomized_against_oracle(
             heap,
             values,
             active,
-            ITEM_COUNT
+            item_count
         );
         assert_heap_invariants(heap);
     }
@@ -697,16 +726,19 @@ static void test_randomized_against_oracle(
         size_t min_index;
         struct keyed_value *extracted;
 
-        assert(find_min_active_item(values, active, ITEM_COUNT, &min_index) == 0);
+        assert(find_min_active_item(values, active, item_count, &min_index) == 0);
         extracted = heapx_extract_min(heap);
         assert(extracted != NULL);
         assert(extracted->priority == values[min_index].priority);
         active[extracted->id] = 0;
     }
 
-    assert(count_active_items(active, ITEM_COUNT) == 0);
+    assert(count_active_items(active, item_count) == 0);
     assert_heap_invariants(heap);
     heapx_destroy(heap);
+    free(active);
+    free(handles);
+    free(values);
 }
 
 int main(void)
