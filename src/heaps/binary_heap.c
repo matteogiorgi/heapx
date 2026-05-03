@@ -31,23 +31,29 @@ struct binary_heap {
     /** Common heapx_heap base. Must be the first field. */
     struct heapx_heap base;
     /** Contiguous array of stored entries. */
-    struct binary_heap_handle **data;
+    struct binary_heap_handle *data;
     /** Number of items currently stored. */
     size_t size;
     /** Allocated number of slots in data. */
     size_t capacity;
+    /** Pool for stable locators used by handled entries. */
+    struct heapx_node_pool locators;
+};
+
+/** @brief Stable owner object stored in public handle slots. */
+struct binary_heap_locator {
+    /** Public generational handle associated with this locator. */
+    struct heapx_handle handle;
+    /** Current array position of the handled entry. */
+    size_t index;
 };
 
 /** @brief Backend-specific entry for an item stored in a binary heap. */
 struct binary_heap_handle {
-    /** Public generational handle associated with this entry. */
-    struct heapx_handle handle;
-    /** Non-zero when handle was requested by the caller. */
-    int has_handle;
     /** Caller-owned item pointer stored in this entry. */
     void *item;
-    /** Current array position, updated whenever handles are swapped. */
-    size_t index;
+    /** Stable locator for targeted operations, or NULL for plain inserts. */
+    struct binary_heap_locator *locator;
 };
 
 static void binary_heap_destroy(struct heapx_heap *base);
@@ -109,15 +115,16 @@ static const struct binary_heap *binary_heap_from_const_base(
     return (const struct binary_heap *)base;
 }
 
-/** @brief Swap two handle slots in the heap storage. */
-static void binary_heap_swap(struct binary_heap *heap, size_t lhs, size_t rhs)
+/** @brief Store an entry at index and refresh its locator position. */
+static void binary_heap_store_entry(
+    struct binary_heap *heap,
+    size_t index,
+    struct binary_heap_handle entry
+)
 {
-    struct binary_heap_handle *tmp = heap->data[lhs];
-
-    heap->data[lhs] = heap->data[rhs];
-    heap->data[rhs] = tmp;
-    heap->data[lhs]->index = lhs;
-    heap->data[rhs]->index = rhs;
+    heap->data[index] = entry;
+    if (heap->data[index].locator != NULL)
+        heap->data[index].locator->index = index;
 }
 
 /**
@@ -127,20 +134,21 @@ static void binary_heap_swap(struct binary_heap *heap, size_t lhs, size_t rhs)
  */
 static void binary_heap_sift_up(struct binary_heap *heap, size_t index)
 {
+    struct binary_heap_handle entry = heap->data[index];
+    size_t original = index;
+
     while (index > 0) {
         size_t parent = (index - 1) / 2;
 
-        if (
-            heap->base.cmp(
-                heap->data[index]->item,
-                heap->data[parent]->item
-            ) >= 0
-            )
+        if (heap->base.cmp(entry.item, heap->data[parent].item) >= 0)
             break;
 
-        binary_heap_swap(heap, index, parent);
+        binary_heap_store_entry(heap, index, heap->data[parent]);
         index = parent;
     }
+
+    if (index != original)
+        binary_heap_store_entry(heap, index, entry);
 }
 
 /**
@@ -150,37 +158,36 @@ static void binary_heap_sift_up(struct binary_heap *heap, size_t index)
  */
 static void binary_heap_sift_down(struct binary_heap *heap, size_t index)
 {
+    struct binary_heap_handle entry = heap->data[index];
+    size_t original = index;
     size_t left, right, smallest;
 
     for (;;) {
         left = 2 * index + 1;
         right = left + 1;
-        smallest = index;
+        if (left >= heap->size)
+            break;
 
-        if (
-            left < heap->size &&
-            heap->base.cmp(
-                heap->data[left]->item,
-                heap->data[smallest]->item
-            ) < 0
-            )
-            smallest = left;
+        smallest = left;
 
         if (
             right < heap->size &&
             heap->base.cmp(
-                heap->data[right]->item,
-                heap->data[smallest]->item
+                heap->data[right].item,
+                heap->data[left].item
             ) < 0
             )
             smallest = right;
 
-        if (smallest == index)
+        if (heap->base.cmp(heap->data[smallest].item, entry.item) >= 0)
             break;
 
-        binary_heap_swap(heap, index, smallest);
+        binary_heap_store_entry(heap, index, heap->data[smallest]);
         index = smallest;
     }
+
+    if (index != original)
+        binary_heap_store_entry(heap, index, entry);
 }
 
 /**
@@ -194,7 +201,8 @@ static void binary_heap_sift_down(struct binary_heap *heap, size_t index)
  */
 static int binary_heap_reserve(struct binary_heap *heap, size_t capacity)
 {
-    struct binary_heap_handle **new_data;
+    struct binary_heap_handle *new_data;
+    size_t i;
 
     if (capacity <= heap->capacity)
         return 0;
@@ -205,6 +213,10 @@ static int binary_heap_reserve(struct binary_heap *heap, size_t capacity)
 
     heap->data = new_data;
     heap->capacity = capacity;
+    for (i = 0; i < heap->size; i++) {
+        if (heap->data[i].locator != NULL)
+            heap->data[i].locator->index = i;
+    }
     return 0;
 }
 
@@ -220,7 +232,7 @@ static int binary_heap_find_index(
     size_t i;
 
     for (i = 0; i < heap->size; i++) {
-        if (heap->data[i]->item == item) {
+        if (heap->data[i].item == item) {
             *index = i;
             return 0;
         }
@@ -237,8 +249,8 @@ static void binary_heap_repair_at(struct binary_heap *heap, size_t index)
     if (
         index > 0 &&
         heap->base.cmp(
-            heap->data[index]->item,
-            heap->data[(index - 1) / 2]->item
+            heap->data[index].item,
+            heap->data[(index - 1) / 2].item
         ) < 0
         ) {
         binary_heap_sift_up(heap, index);
@@ -260,6 +272,16 @@ struct heapx_heap *binary_heap_create(heapx_cmp_fn cmp)
     heap->data = NULL;
     heap->size = 0;
     heap->capacity = 0;
+    if (
+        heapx_node_pool_init(
+            &heap->locators,
+            sizeof(struct binary_heap_locator),
+            256
+        ) != 0
+        ) {
+        free(heap);
+        return NULL;
+    }
 
     return &heap->base;
 }
@@ -272,11 +294,9 @@ struct heapx_heap *binary_heap_create(heapx_cmp_fn cmp)
 static void binary_heap_destroy(struct heapx_heap *base)
 {
     struct binary_heap *heap = binary_heap_from_base(base);
-    size_t i;
 
-    for (i = 0; i < heap->size; i++)
-        free(heap->data[i]);
     free(heap->data);
+    heapx_node_pool_destroy(&heap->locators);
 }
 
 /**
@@ -293,6 +313,7 @@ static int binary_heap_insert_entry(
 {
     struct binary_heap *heap = binary_heap_from_base(base);
     struct binary_heap_handle *entry;
+    struct binary_heap_locator *locator = NULL;
     size_t new_capacity;
 
     if (heap->size == heap->capacity) {
@@ -303,22 +324,24 @@ static int binary_heap_insert_entry(
             return -1;
     }
 
-    entry = malloc(sizeof(*entry));
-    if (entry == NULL)
-        return -1;
+    entry = &heap->data[heap->size];
+    entry->item = item;
+    entry->locator = NULL;
 
-    entry->has_handle = out != NULL;
     if (out != NULL) {
-        if (heapx_handle_attach(base, item, entry, out) != 0) {
-            free(entry);
+        locator = heapx_node_pool_alloc(&heap->locators);
+        if (locator == NULL)
+            return -1;
+        locator->index = heap->size;
+
+        if (heapx_handle_attach(base, item, locator, out) != 0) {
+            heapx_node_pool_free(&heap->locators, locator);
             return -1;
         }
-        entry->handle = *out;
+        locator->handle = *out;
+        entry->locator = locator;
     }
 
-    entry->item = item;
-    entry->index = heap->size;
-    heap->data[heap->size] = entry;
     binary_heap_sift_up(heap, heap->size);
     heap->size++;
 
@@ -351,9 +374,9 @@ static int binary_heap_decrease_key(
 )
 {
     struct binary_heap *heap = binary_heap_from_base(base);
-    struct binary_heap_handle *entry = owner;
+    struct binary_heap_locator *locator = owner;
 
-    binary_heap_sift_up(heap, entry->index);
+    binary_heap_sift_up(heap, locator->index);
     return 0;
 }
 
@@ -366,21 +389,22 @@ static void *binary_heap_remove(
 )
 {
     struct binary_heap *heap = binary_heap_from_base(base);
-    struct binary_heap_handle *entry = owner;
-    size_t index = entry->index;
+    struct binary_heap_locator *locator = owner;
+    struct binary_heap_handle *entry = &heap->data[locator->index];
+    size_t index = locator->index;
     void *item = entry->item;
 
-    if (entry->has_handle)
-        heapx_handle_release(base, entry->handle);
+    heapx_handle_release(base, locator->handle);
+    heapx_node_pool_free(&heap->locators, locator);
 
     heap->size--;
     if (index != heap->size) {
         heap->data[index] = heap->data[heap->size];
-        heap->data[index]->index = index;
+        if (heap->data[index].locator != NULL)
+            heap->data[index].locator->index = index;
         binary_heap_repair_at(heap, index);
     }
 
-    free(entry);
     return item;
 }
 
@@ -406,7 +430,7 @@ static void *binary_heap_peek_min(const struct heapx_heap *base)
     if (heap->size == 0)
         return NULL;
 
-    return heap->data[0]->item;
+    return heap->data[0].item;
 }
 
 /**
@@ -424,19 +448,21 @@ static void *binary_heap_extract_min(struct heapx_heap *base)
     if (heap->size == 0)
         return NULL;
 
-    entry = heap->data[0];
+    entry = &heap->data[0];
     item = entry->item;
-    if (entry->has_handle)
-        heapx_handle_release(base, entry->handle);
+    if (entry->locator != NULL) {
+        heapx_handle_release(base, entry->locator->handle);
+        heapx_node_pool_free(&heap->locators, entry->locator);
+    }
     heap->size--;
 
     if (heap->size > 0) {
         heap->data[0] = heap->data[heap->size];
-        heap->data[0]->index = 0;
+        if (heap->data[0].locator != NULL)
+            heap->data[0].locator->index = 0;
         binary_heap_sift_down(heap, 0);
     }
 
-    free(entry);
     return item;
 }
 
@@ -465,31 +491,28 @@ static int binary_heap_check_invariants(const struct heapx_heap *base)
         return -1;
 
     for (i = 0; i < heap->size; i++) {
-        const struct binary_heap_handle *entry = heap->data[i];
+        const struct binary_heap_handle *entry = &heap->data[i];
         size_t left = 2 * i + 1;
         size_t right = left + 1;
         void *owner;
 
-        if (entry == NULL)
-            return -1;
-        if (entry->index != i)
-            return -1;
-
-        if (entry->has_handle) {
-            if (heapx_handle_resolve(base, entry->handle, &owner) != 0)
+        if (entry->locator != NULL) {
+            if (entry->locator->index != i)
                 return -1;
-            if (owner != entry)
+            if (heapx_handle_resolve(base, entry->locator->handle, &owner) != 0)
+                return -1;
+            if (owner != entry->locator)
                 return -1;
         }
 
         if (
             left < heap->size &&
-            heap->base.cmp(heap->data[left]->item, entry->item) < 0
+            heap->base.cmp(heap->data[left].item, entry->item) < 0
             )
             return -1;
         if (
             right < heap->size &&
-            heap->base.cmp(heap->data[right]->item, entry->item) < 0
+            heap->base.cmp(heap->data[right].item, entry->item) < 0
             )
             return -1;
     }
