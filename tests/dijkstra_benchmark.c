@@ -9,6 +9,7 @@
 #include <time.h>
 
 #include "heapx/heap.h"
+#include "heap_internal.h"
 
 struct csr_graph {
     size_t node_count;
@@ -99,6 +100,40 @@ static int parse_unsigned(const char *text, unsigned *value)
     return 0;
 }
 
+static int line_has_only_trailing_space(const char *line, int offset)
+{
+    const char *cursor = line + offset;
+
+    while (*cursor == ' ' || *cursor == '\t' || *cursor == '\r' || *cursor == '\n')
+        cursor++;
+
+    return *cursor == '\0';
+}
+
+static void *checked_malloc_array(size_t count, size_t element_size)
+{
+    size_t bytes;
+
+    if (heapx_size_mul(count, element_size, &bytes) != 0)
+        return NULL;
+    if (bytes == 0)
+        bytes = 1;
+
+    return malloc(bytes);
+}
+
+static void *checked_calloc_array(size_t count, size_t element_size)
+{
+    size_t bytes;
+
+    if (heapx_size_mul(count, element_size, &bytes) != 0)
+        return NULL;
+    if (bytes == 0)
+        return calloc(1, 1);
+
+    return calloc(count, element_size);
+}
+
 static void csr_graph_destroy(struct csr_graph *graph)
 {
     free(graph->offsets);
@@ -116,11 +151,29 @@ static int build_csr_graph(
 )
 {
     size_t *positions;
+    size_t vertex_slot_count;
+    size_t position_bytes;
     size_t i;
 
-    graph->offsets = calloc(graph->node_count + 2, sizeof(*graph->offsets));
-    graph->heads = calloc(loaded_arc_count, sizeof(*graph->heads));
-    graph->weights = calloc(loaded_arc_count, sizeof(*graph->weights));
+    if (heapx_size_add(graph->node_count, 2, &vertex_slot_count) != 0)
+        return -1;
+    if (
+        heapx_size_mul(vertex_slot_count, sizeof(*positions), &position_bytes) != 0
+        )
+        return -1;
+
+    graph->offsets = checked_calloc_array(
+        vertex_slot_count,
+        sizeof(*graph->offsets)
+    );
+    graph->heads = checked_calloc_array(
+        loaded_arc_count,
+        sizeof(*graph->heads)
+    );
+    graph->weights = checked_calloc_array(
+        loaded_arc_count,
+        sizeof(*graph->weights)
+    );
     positions = NULL;
 
     if (
@@ -136,14 +189,14 @@ static int build_csr_graph(
     for (i = 1; i <= graph->node_count + 1; i++)
         graph->offsets[i] += graph->offsets[i - 1];
 
-    positions = malloc((graph->node_count + 2) * sizeof(*positions));
+    positions = checked_malloc_array(vertex_slot_count, sizeof(*positions));
     if (positions == NULL)
         goto fail;
 
     memcpy(
         positions,
         graph->offsets,
-        (graph->node_count + 2) * sizeof(*positions)
+        position_bytes
     );
 
     for (i = 0; i < loaded_arc_count; i++) {
@@ -183,6 +236,10 @@ static int load_dimacs_graph(const char *path, struct csr_graph *graph)
         char tag[16];
 
         line_number++;
+        if (strchr(line, '\n') == NULL && !feof(file)) {
+            fprintf(stderr, "line too long at %zu\n", line_number);
+            goto fail;
+        }
         if (line[0] == '\n' || line[0] == '\0' || line[0] == 'c')
             continue;
 
@@ -193,25 +250,31 @@ static int load_dimacs_graph(const char *path, struct csr_graph *graph)
             char problem[16];
             char nodes_text[32];
             char arcs_text[32];
+            int parsed_offset = 0;
 
             if (
+                seen_problem ||
                 sscanf(
                     line,
-                    "%15s %15s %31s %31s",
+                    "%15s %15s %31s %31s %n",
                     tag,
                     problem,
                     nodes_text,
-                    arcs_text
+                    arcs_text,
+                    &parsed_offset
                 ) != 4 ||
+                !line_has_only_trailing_space(line, parsed_offset) ||
                 strcmp(problem, "sp") != 0 ||
                 parse_size(nodes_text, &graph->node_count) != 0 ||
-                parse_size(arcs_text, &graph->arc_count) != 0
+                parse_size(arcs_text, &graph->arc_count) != 0 ||
+                graph->node_count == 0 ||
+                graph->node_count > UINT_MAX
                 ) {
                 fprintf(stderr, "invalid problem line at %zu\n", line_number);
                 goto fail;
             }
 
-            arcs = calloc(graph->arc_count, sizeof(*arcs));
+            arcs = checked_calloc_array(graph->arc_count, sizeof(*arcs));
             if (arcs == NULL)
                 goto fail;
             seen_problem = 1;
@@ -223,6 +286,7 @@ static int load_dimacs_graph(const char *path, struct csr_graph *graph)
             char head_text[32];
             char weight_text[32];
             struct arc arc;
+            int parsed_offset = 0;
 
             if (!seen_problem || loaded_arc_count >= graph->arc_count) {
                 fprintf(stderr, "unexpected arc line at %zu\n", line_number);
@@ -232,12 +296,14 @@ static int load_dimacs_graph(const char *path, struct csr_graph *graph)
             if (
                 sscanf(
                     line,
-                    "%15s %31s %31s %31s",
+                    "%15s %31s %31s %31s %n",
                     tag,
                     tail_text,
                     head_text,
-                    weight_text
+                    weight_text,
+                    &parsed_offset
                 ) != 4 ||
+                !line_has_only_trailing_space(line, parsed_offset) ||
                 parse_unsigned(tail_text, &arc.tail) != 0 ||
                 parse_unsigned(head_text, &arc.head) != 0 ||
                 parse_unsigned(weight_text, &arc.weight) != 0 ||
@@ -271,6 +337,16 @@ static int load_dimacs_graph(const char *path, struct csr_graph *graph)
         goto fail;
     }
 
+    if (loaded_arc_count != graph->arc_count) {
+        fprintf(
+            stderr,
+            "arc count mismatch: expected %zu, loaded %zu\n",
+            graph->arc_count,
+            loaded_arc_count
+        );
+        goto fail;
+    }
+
     graph->loaded_arc_count = loaded_arc_count;
     if (build_csr_graph(graph, arcs, loaded_arc_count) != 0)
         goto fail;
@@ -294,9 +370,13 @@ static void dijkstra_nodes_destroy(struct dijkstra_node *nodes)
 static struct dijkstra_node *dijkstra_nodes_create(size_t node_count)
 {
     struct dijkstra_node *nodes;
+    size_t node_slot_count;
     size_t i;
 
-    nodes = malloc((node_count + 1) * sizeof(*nodes));
+    if (heapx_size_add(node_count, 1, &node_slot_count) != 0)
+        return NULL;
+
+    nodes = checked_malloc_array(node_slot_count, sizeof(*nodes));
     if (nodes == NULL)
         return NULL;
 

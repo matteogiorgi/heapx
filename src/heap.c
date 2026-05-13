@@ -8,13 +8,24 @@
 #include "heaps/fibonacci_heap.h"
 #include "heaps/kaplan_heap.h"
 
+/** @brief Next process-local heap identifier assigned to a new heap. */
 static uint64_t heapx_next_heap_id = 1;
 
+/**
+ * @brief Allocation block owned by a fixed-size node pool.
+ *
+ * The union members force enough alignment for pooled object payloads placed
+ * immediately after the block header.
+ */
 union heapx_pool_block {
+    /** Block-list linkage fields. */
     struct {
+        /** Next allocated block in the pool-owned block list. */
         union heapx_pool_block *next;
     } fields;
+    /** Pointer-alignment member for pooled payloads. */
     void *pointer_alignment;
+    /** Long-double-alignment member for pooled payloads. */
     long double long_double_alignment;
 };
 
@@ -54,15 +65,20 @@ void heapx_heap_init(
     heap->free_handle_slot = (size_t)-1;
 }
 
+/** @brief Ensure the common handle slot table can store capacity slots. */
 static int heapx_handle_reserve(struct heapx_heap *heap, size_t capacity)
 {
     struct heapx_handle_slot *slots;
+    size_t bytes;
     size_t i;
 
     if (capacity <= heap->handle_slot_capacity)
         return 0;
 
-    slots = realloc(heap->handle_slots, capacity * sizeof(*slots));
+    if (heapx_size_mul(capacity, sizeof(*slots), &bytes) != 0)
+        return -1;
+
+    slots = realloc(heap->handle_slots, bytes);
     if (slots == NULL)
         return -1;
 
@@ -76,6 +92,24 @@ static int heapx_handle_reserve(struct heapx_heap *heap, size_t capacity)
     }
 
     heap->handle_slot_capacity = capacity;
+    return 0;
+}
+
+int heapx_size_mul(size_t left, size_t right, size_t *out)
+{
+    if (left != 0 && right > (size_t)-1 / left)
+        return -1;
+
+    *out = left * right;
+    return 0;
+}
+
+int heapx_size_add(size_t left, size_t right, size_t *out)
+{
+    if (left > (size_t)-1 - right)
+        return -1;
+
+    *out = left + right;
     return 0;
 }
 
@@ -172,6 +206,7 @@ void heapx_handle_release(struct heapx_heap *heap, struct heapx_handle handle)
     heap->free_handle_slot = handle.slot;
 }
 
+/** @brief Round value up to alignment, returning 0 on overflow. */
 static size_t heapx_round_up_size(size_t value, size_t alignment)
 {
     size_t remainder = value % alignment;
@@ -222,17 +257,20 @@ void heapx_node_pool_destroy(struct heapx_node_pool *pool)
     pool->blocks = NULL;
 }
 
+/** @brief Allocate one new block and push its object slots onto the free list. */
 static int heapx_node_pool_grow(struct heapx_node_pool *pool)
 {
     union heapx_pool_block *block;
     unsigned char *data;
+    size_t payload;
     size_t bytes;
     size_t i;
 
-    if (pool->block_capacity > ((size_t)-1 - sizeof(*block)) / pool->object_size)
+    if (heapx_size_mul(pool->object_size, pool->block_capacity, &payload) != 0)
+        return -1;
+    if (heapx_size_add(sizeof(*block), payload, &bytes) != 0)
         return -1;
 
-    bytes = sizeof(*block) + pool->object_size * pool->block_capacity;
     block = malloc(bytes);
     if (block == NULL)
         return -1;

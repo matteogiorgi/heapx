@@ -10,6 +10,7 @@
 #include <time.h>
 
 #include "heapx/heap.h"
+#include "heap_internal.h"
 
 struct bench_item {
     uint64_t key;
@@ -104,6 +105,18 @@ static uint64_t mix_checksum(uint64_t checksum, const struct bench_item *item)
         (item->id << 6) + (item->id >> 2));
 }
 
+static struct bench_item *bench_items_alloc(size_t count)
+{
+    size_t bytes;
+
+    if (heapx_size_mul(count, sizeof(struct bench_item), &bytes) != 0)
+        return NULL;
+    if (bytes == 0)
+        return calloc(1, 1);
+
+    return calloc(count, sizeof(struct bench_item));
+}
+
 static int verify_monotonic(
     const struct bench_item *previous,
     const struct bench_item *current
@@ -130,7 +143,7 @@ static int run_insert_extract(
     const struct bench_item *previous = NULL;
     size_t i;
 
-    items = calloc(count, sizeof(*items));
+    items = bench_items_alloc(count);
     heap = heapx_create(implementation, bench_item_cmp);
     if (items == NULL || heap == NULL)
         goto fail;
@@ -184,7 +197,7 @@ static int run_insert_only(
     uint64_t checksum = 0;
     size_t i;
 
-    items = calloc(count, sizeof(*items));
+    items = bench_items_alloc(count);
     heap = heapx_create(implementation, bench_item_cmp);
     if (items == NULL || heap == NULL)
         goto fail;
@@ -233,7 +246,7 @@ static int run_first_extract(
     uint64_t checksum = 0;
     size_t i;
 
-    items = calloc(count, sizeof(*items));
+    items = bench_items_alloc(count);
     heap = heapx_create(implementation, bench_item_cmp);
     if (items == NULL || heap == NULL)
         goto fail;
@@ -288,7 +301,7 @@ static int run_decrease_extract(
 
     (void)seed;
 
-    items = calloc(count, sizeof(*items));
+    items = bench_items_alloc(count);
     heap = heapx_create(implementation, bench_item_cmp);
     if (items == NULL || heap == NULL)
         goto fail;
@@ -349,7 +362,7 @@ static int run_decrease_only(
 
     (void)seed;
 
-    items = calloc(count, sizeof(*items));
+    items = bench_items_alloc(count);
     heap = heapx_create(implementation, bench_item_cmp);
     if (items == NULL || heap == NULL)
         goto fail;
@@ -409,7 +422,7 @@ static int run_mixed_handles(
     uint64_t operations = 0;
     size_t i;
 
-    items = calloc(count, sizeof(*items));
+    items = bench_items_alloc(count);
     heap = heapx_create(implementation, bench_item_cmp);
     if (items == NULL || heap == NULL)
         goto fail;

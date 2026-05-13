@@ -202,12 +202,16 @@ static void binary_heap_sift_down(struct binary_heap *heap, size_t index)
 static int binary_heap_reserve(struct binary_heap *heap, size_t capacity)
 {
     struct binary_heap_handle *new_data;
+    size_t bytes;
     size_t i;
 
     if (capacity <= heap->capacity)
         return 0;
 
-    new_data = realloc(heap->data, capacity * sizeof(*heap->data));
+    if (heapx_size_mul(capacity, sizeof(*heap->data), &bytes) != 0)
+        return -1;
+
+    new_data = realloc(heap->data, bytes);
     if (new_data == NULL)
         return -1;
 
@@ -348,6 +352,7 @@ static int binary_heap_insert_entry(
     return 0;
 }
 
+/** @brief Insert an item without creating a public handle. */
 static int binary_heap_insert(struct heapx_heap *base, void *item)
 {
     return binary_heap_insert_entry(base, item, NULL);
@@ -478,6 +483,7 @@ static int binary_heap_empty(const struct heapx_heap *base)
     return binary_heap_size(base) == 0;
 }
 
+/** @brief Return 0 when binary heap storage and handle locators are valid. */
 static int binary_heap_check_invariants(const struct heapx_heap *base)
 {
     const struct binary_heap *heap = binary_heap_from_const_base(base);

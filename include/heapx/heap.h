@@ -55,17 +55,25 @@
  * Available heap backends are selected with enum
  * heapx_implementation:
  *
- * | Selector | Backend | Insert | Peek min | Extract min |
- * | --- | --- | --- | --- | --- |
- * | HEAPX_BINARY_HEAP | Binary min-heap | O(log n) | O(1) | O(log n) |
- * | HEAPX_FIBONACCI_HEAP | Fibonacci heap | amortized O(1) | O(1) | amortized O(log n) |
- * | HEAPX_KAPLAN_HEAP | Simple Fibonacci heap from "Fibonacci Heaps Revisited" | amortized O(1) | O(1) | amortized O(log n) |
+ * | Selector | Backend | Insert | Decrease key | Remove | Peek min | Extract min |
+ * | --- | --- | --- | --- | --- | --- | --- |
+ * | HEAPX_BINARY_HEAP | Binary min-heap | O(log n) | O(log n) | O(log n) | O(1) | O(log n) |
+ * | HEAPX_FIBONACCI_HEAP | Fibonacci heap | amortized O(1) | amortized O(1) | amortized O(log n) | O(1) | amortized O(log n) |
+ * | HEAPX_KAPLAN_HEAP | Simple Fibonacci heap from "Fibonacci Heaps Revisited" | amortized O(1) | amortized O(1) | amortized O(log n) | O(1) | amortized O(log n) |
  *
  * All implementations use the same comparator and ownership contract.
  *
  * Operations that target an existing item use heapx_handle. This
  * follows the Fibonacci heap paper's assumption that decrease-key and arbitrary
  * deletion know the item's heap position.
+ *
+ * heapx_contains() is intentionally a linear pointer-identity search in the
+ * current backends and is not part of the heap-native complexity claims.
+ *
+ * The amortized bounds above describe normal successful-operation paths. When
+ * an internal temporary allocation used for consolidation fails, pointer-heavy
+ * backends preserve heap correctness with a fallback that may postpone some
+ * consolidation work.
  *
  * @section thread_safety Thread Safety
  *
@@ -345,6 +353,9 @@ int heapx_insert_handle(
  * @return 0 on success, or -1 if heap is NULL, if handle is not valid for heap,
  *         or if handle is no longer live.
  *
+ * Complexity: O(log n) for HEAPX_BINARY_HEAP; amortized O(1) for
+ * HEAPX_FIBONACCI_HEAP and HEAPX_KAPLAN_HEAP.
+ *
  * @warning Calling this after lowering an item's priority does not restore
  *          heap order.
  */
@@ -366,6 +377,8 @@ int heapx_decrease_key(
  * @note If the stored item pointer itself is NULL, a successful remove also
  *       returns NULL. Use heapx_contains() or external bookkeeping if
  *       that distinction matters.
+ * Complexity: O(log n) for HEAPX_BINARY_HEAP; amortized O(log n) for
+ * HEAPX_FIBONACCI_HEAP and HEAPX_KAPLAN_HEAP.
  * @post On success, heapx_size(heap) decreases by one.
  */
 void *heapx_remove(
@@ -383,6 +396,7 @@ void *heapx_remove(
  * @note Current backends implement this as a linear pointer-identity search.
  *       It is intended as a convenience or diagnostic query, not as a
  *       heap-native performance operation.
+ * Complexity: O(n) for all current backends.
  */
 int heapx_contains(const struct heapx_heap *heap, const void *item);
 

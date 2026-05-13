@@ -288,12 +288,16 @@ static int kaplan_heap_reserve_rank_table(
 )
 {
     struct kaplan_heap_node **table;
+    size_t bytes;
     size_t i;
 
     if (capacity <= heap->rank_table_capacity)
         return 0;
 
-    table = realloc(heap->rank_table, capacity * sizeof(*table));
+    if (heapx_size_mul(capacity, sizeof(*table), &bytes) != 0)
+        return -1;
+
+    table = realloc(heap->rank_table, bytes);
     if (table == NULL)
         return -1;
 
@@ -505,6 +509,7 @@ static int kaplan_heap_insert_node(
     return 0;
 }
 
+/** @brief Insert an item without creating a public handle. */
 static int kaplan_heap_insert(struct heapx_heap *base, void *item)
 {
     return kaplan_heap_insert_node(base, item, NULL);
@@ -638,6 +643,7 @@ static int kaplan_heap_empty(const struct heapx_heap *base)
     return kaplan_heap_size(base) == 0;
 }
 
+/** @brief Count and validate the direct child list of parent. */
 static int kaplan_heap_count_direct_children(
     const struct kaplan_heap *heap,
     const struct kaplan_heap_node *parent,
@@ -668,6 +674,7 @@ static int kaplan_heap_count_direct_children(
     return 0;
 }
 
+/** @brief Recursively validate one sibling list and its child subtrees. */
 static int kaplan_heap_check_node_list(
     const struct kaplan_heap *heap,
     const struct kaplan_heap_node *node,
@@ -724,6 +731,7 @@ static int kaplan_heap_check_node_list(
     return 0;
 }
 
+/** @brief Return 0 when Kaplan heap tree, rank table, and handles are valid. */
 static int kaplan_heap_check_invariants(const struct heapx_heap *base)
 {
     const struct kaplan_heap *heap = kaplan_heap_from_const_base(base);

@@ -4,6 +4,9 @@ build/
 *.a
 *.so
 
+# Local benchmark results
+benchmarks/*.tsv
+
 # Local benchmark datasets
 graphs/dimacs/*.gr
 graphs/dimacs/*.gz

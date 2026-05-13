@@ -203,6 +203,12 @@ int heapx_node_pool_init(
     size_t block_capacity
 );
 
+/** @brief Multiply two sizes, returning -1 on overflow. */
+int heapx_size_mul(size_t left, size_t right, size_t *out);
+
+/** @brief Add two sizes, returning -1 on overflow. */
+int heapx_size_add(size_t left, size_t right, size_t *out);
+
 /** @brief Release every block owned by pool. */
 void heapx_node_pool_destroy(struct heapx_node_pool *pool);
 

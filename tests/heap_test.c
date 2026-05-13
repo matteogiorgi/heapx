@@ -1,4 +1,3 @@
-#include <assert.h>
 #include <errno.h>
 #include <limits.h>
 #include <stddef.h>
@@ -8,9 +7,23 @@
 #include "heapx/heap.h"
 #include "heap_internal.h"
 
+#define TEST_ASSERT(expression) \
+    do { \
+        if (!(expression)) { \
+            fprintf( \
+                stderr, \
+                "test assertion failed at %s:%d: %s\n", \
+                __FILE__, \
+                __LINE__, \
+                #expression \
+            ); \
+            abort(); \
+        } \
+    } while (0)
+
 static void assert_heap_invariants(const struct heapx_heap *heap)
 {
-    assert(heapx_check_invariants(heap) == 0);
+    TEST_ASSERT(heapx_check_invariants(heap) == 0);
 }
 
 static unsigned test_seed_from_env(void)
@@ -24,9 +37,9 @@ static unsigned test_seed_from_env(void)
 
     errno = 0;
     parsed = strtoul(text, &end, 0);
-    assert(errno == 0);
-    assert(*end == '\0');
-    assert(parsed <= UINT_MAX);
+    TEST_ASSERT(errno == 0);
+    TEST_ASSERT(*end == '\0');
+    TEST_ASSERT(parsed <= UINT_MAX);
 
     return (unsigned)parsed;
 }
@@ -42,12 +55,22 @@ static size_t test_size_from_env(const char *name, size_t default_value)
 
     errno = 0;
     parsed = strtoul(text, &end, 0);
-    assert(errno == 0);
-    assert(*end == '\0');
-    assert(parsed > 0);
-    assert((unsigned long)(size_t)parsed == parsed);
+    TEST_ASSERT(errno == 0);
+    TEST_ASSERT(*end == '\0');
+    TEST_ASSERT(parsed > 0);
+    TEST_ASSERT((unsigned long)(size_t)parsed == parsed);
 
     return (size_t)parsed;
+}
+
+static void *test_array_alloc(size_t count, size_t element_size)
+{
+    size_t bytes;
+
+    if (heapx_size_mul(count, element_size, &bytes) != 0)
+        return NULL;
+
+    return malloc(bytes);
 }
 
 static int int_cmp(const void *lhs, const void *rhs)
@@ -85,13 +108,13 @@ static void test_create_rejects_missing_cmp(void)
 {
     struct heapx_handle invalid = { 0, 0, 0 };
 
-    assert(heapx_create(HEAPX_BINARY_HEAP, NULL) == NULL);
-    assert(heapx_create(HEAPX_FIBONACCI_HEAP, NULL) == NULL);
-    assert(heapx_create(HEAPX_KAPLAN_HEAP, NULL) == NULL);
+    TEST_ASSERT(heapx_create(HEAPX_BINARY_HEAP, NULL) == NULL);
+    TEST_ASSERT(heapx_create(HEAPX_FIBONACCI_HEAP, NULL) == NULL);
+    TEST_ASSERT(heapx_create(HEAPX_KAPLAN_HEAP, NULL) == NULL);
 
-    assert(heapx_contains(NULL, NULL) == 0);
-    assert(heapx_remove(NULL, invalid) == NULL);
-    assert(heapx_decrease_key(NULL, invalid) == -1);
+    TEST_ASSERT(heapx_contains(NULL, NULL) == 0);
+    TEST_ASSERT(heapx_remove(NULL, invalid) == NULL);
+    TEST_ASSERT(heapx_decrease_key(NULL, invalid) == -1);
 }
 
 static void test_empty_heap(enum heapx_implementation implementation)
@@ -99,12 +122,12 @@ static void test_empty_heap(enum heapx_implementation implementation)
     struct heapx_heap *heap;
 
     heap = heapx_create(implementation, int_cmp);
-    assert(heap != NULL);
+    TEST_ASSERT(heap != NULL);
 
-    assert(heapx_empty(heap));
-    assert(heapx_size(heap) == 0);
-    assert(heapx_peek_min(heap) == NULL);
-    assert(heapx_extract_min(heap) == NULL);
+    TEST_ASSERT(heapx_empty(heap));
+    TEST_ASSERT(heapx_size(heap) == 0);
+    TEST_ASSERT(heapx_peek_min(heap) == NULL);
+    TEST_ASSERT(heapx_extract_min(heap) == NULL);
     assert_heap_invariants(heap);
 
     heapx_destroy(heap);
@@ -118,20 +141,20 @@ static void test_insert_extract_order(enum heapx_implementation implementation)
     size_t i;
 
     heap = heapx_create(implementation, int_cmp);
-    assert(heap != NULL);
+    TEST_ASSERT(heap != NULL);
 
     for (i = 0; i < sizeof(values) / sizeof(values[0]); i++)
-        assert(heapx_insert(heap, &values[i]) == 0);
+        TEST_ASSERT(heapx_insert(heap, &values[i]) == 0);
     assert_heap_invariants(heap);
 
-    assert(heapx_size(heap) == sizeof(values) / sizeof(values[0]));
-    assert(*(int *) heapx_peek_min(heap) == 1);
+    TEST_ASSERT(heapx_size(heap) == sizeof(values) / sizeof(values[0]));
+    TEST_ASSERT(*(int *) heapx_peek_min(heap) == 1);
 
     for (i = 0; i < sizeof(expected) / sizeof(expected[0]); i++)
-        assert(*(int *) heapx_extract_min(heap) == expected[i]);
+        TEST_ASSERT(*(int *) heapx_extract_min(heap) == expected[i]);
     assert_heap_invariants(heap);
 
-    assert(heapx_empty(heap));
+    TEST_ASSERT(heapx_empty(heap));
     heapx_destroy(heap);
 }
 
@@ -143,14 +166,14 @@ static void test_duplicates(enum heapx_implementation implementation)
     size_t i;
 
     heap = heapx_create(implementation, int_cmp);
-    assert(heap != NULL);
+    TEST_ASSERT(heap != NULL);
 
     for (i = 0; i < sizeof(values) / sizeof(values[0]); i++)
-        assert(heapx_insert(heap, &values[i]) == 0);
+        TEST_ASSERT(heapx_insert(heap, &values[i]) == 0);
     assert_heap_invariants(heap);
 
     for (i = 0; i < sizeof(expected) / sizeof(expected[0]); i++)
-        assert(*(int *) heapx_extract_min(heap) == expected[i]);
+        TEST_ASSERT(*(int *) heapx_extract_min(heap) == expected[i]);
     assert_heap_invariants(heap);
 
     heapx_destroy(heap);
@@ -164,28 +187,28 @@ static void test_interleaved_operations(
     int values[] = { 10, 4, 7, 1, 6, 3 };
 
     heap = heapx_create(implementation, int_cmp);
-    assert(heap != NULL);
+    TEST_ASSERT(heap != NULL);
 
-    assert(heapx_insert(heap, &values[0]) == 0);
-    assert(heapx_insert(heap, &values[1]) == 0);
-    assert(heapx_insert(heap, &values[2]) == 0);
+    TEST_ASSERT(heapx_insert(heap, &values[0]) == 0);
+    TEST_ASSERT(heapx_insert(heap, &values[1]) == 0);
+    TEST_ASSERT(heapx_insert(heap, &values[2]) == 0);
     assert_heap_invariants(heap);
-    assert(*(int *) heapx_extract_min(heap) == 4);
-    assert_heap_invariants(heap);
-
-    assert(heapx_insert(heap, &values[3]) == 0);
-    assert(heapx_insert(heap, &values[4]) == 0);
-    assert_heap_invariants(heap);
-    assert(*(int *) heapx_extract_min(heap) == 1);
+    TEST_ASSERT(*(int *) heapx_extract_min(heap) == 4);
     assert_heap_invariants(heap);
 
-    assert(heapx_insert(heap, &values[5]) == 0);
+    TEST_ASSERT(heapx_insert(heap, &values[3]) == 0);
+    TEST_ASSERT(heapx_insert(heap, &values[4]) == 0);
     assert_heap_invariants(heap);
-    assert(*(int *) heapx_extract_min(heap) == 3);
-    assert(*(int *) heapx_extract_min(heap) == 6);
-    assert(*(int *) heapx_extract_min(heap) == 7);
-    assert(*(int *) heapx_extract_min(heap) == 10);
-    assert(heapx_extract_min(heap) == NULL);
+    TEST_ASSERT(*(int *) heapx_extract_min(heap) == 1);
+    assert_heap_invariants(heap);
+
+    TEST_ASSERT(heapx_insert(heap, &values[5]) == 0);
+    assert_heap_invariants(heap);
+    TEST_ASSERT(*(int *) heapx_extract_min(heap) == 3);
+    TEST_ASSERT(*(int *) heapx_extract_min(heap) == 6);
+    TEST_ASSERT(*(int *) heapx_extract_min(heap) == 7);
+    TEST_ASSERT(*(int *) heapx_extract_min(heap) == 10);
+    TEST_ASSERT(heapx_extract_min(heap) == NULL);
     assert_heap_invariants(heap);
 
     heapx_destroy(heap);
@@ -202,11 +225,11 @@ static void test_larger_deterministic_order(
     size_t value;
 
     heap = heapx_create(implementation, int_cmp);
-    assert(heap != NULL);
+    TEST_ASSERT(heap != NULL);
 
     for (i = 0; i < 256; i++) {
         values[i] = (int)((i * 37) % 101);
-        assert(heapx_insert(heap, &values[i]) == 0);
+        TEST_ASSERT(heapx_insert(heap, &values[i]) == 0);
     }
     assert_heap_invariants(heap);
 
@@ -228,10 +251,10 @@ static void test_larger_deterministic_order(
     }
 
     for (i = 0; i < 256; i++)
-        assert(*(int *) heapx_extract_min(heap) == expected[i]);
+        TEST_ASSERT(*(int *) heapx_extract_min(heap) == expected[i]);
     assert_heap_invariants(heap);
 
-    assert(heapx_empty(heap));
+    TEST_ASSERT(heapx_empty(heap));
     heapx_destroy(heap);
 }
 
@@ -246,27 +269,27 @@ static void test_contains_and_remove(
     size_t i;
 
     heap = heapx_create(implementation, int_cmp);
-    assert(heap != NULL);
+    TEST_ASSERT(heap != NULL);
 
-    assert(heapx_contains(heap, &values[2]) == 0);
-    assert(heapx_remove(heap, (struct heapx_handle){ 0, 0, 0 }) == NULL);
+    TEST_ASSERT(heapx_contains(heap, &values[2]) == 0);
+    TEST_ASSERT(heapx_remove(heap, (struct heapx_handle){ 0, 0, 0 }) == NULL);
 
     for (i = 0; i < sizeof(values) / sizeof(values[0]); i++)
-        assert(heapx_insert_handle(heap, &values[i], &handles[i]) == 0);
+        TEST_ASSERT(heapx_insert_handle(heap, &values[i], &handles[i]) == 0);
     assert_heap_invariants(heap);
 
-    assert(heapx_contains(heap, &values[2]) != 0);
-    assert(heapx_contains(heap, &missing) == 0);
-    assert(heapx_remove(heap, handles[2]) == &values[2]);
+    TEST_ASSERT(heapx_contains(heap, &values[2]) != 0);
+    TEST_ASSERT(heapx_contains(heap, &missing) == 0);
+    TEST_ASSERT(heapx_remove(heap, handles[2]) == &values[2]);
     assert_heap_invariants(heap);
-    assert(heapx_contains(heap, &values[2]) == 0);
-    assert(heapx_size(heap) == 4);
+    TEST_ASSERT(heapx_contains(heap, &values[2]) == 0);
+    TEST_ASSERT(heapx_size(heap) == 4);
 
-    assert(*(int *) heapx_extract_min(heap) == 1);
-    assert(*(int *) heapx_extract_min(heap) == 3);
-    assert(*(int *) heapx_extract_min(heap) == 4);
-    assert(*(int *) heapx_extract_min(heap) == 7);
-    assert(heapx_empty(heap));
+    TEST_ASSERT(*(int *) heapx_extract_min(heap) == 1);
+    TEST_ASSERT(*(int *) heapx_extract_min(heap) == 3);
+    TEST_ASSERT(*(int *) heapx_extract_min(heap) == 4);
+    TEST_ASSERT(*(int *) heapx_extract_min(heap) == 7);
+    TEST_ASSERT(heapx_empty(heap));
     assert_heap_invariants(heap);
 
     heapx_destroy(heap);
@@ -284,24 +307,24 @@ static void test_remove_uses_handle_identity(
     struct keyed_value *item;
 
     heap = heapx_create(implementation, keyed_value_cmp);
-    assert(heap != NULL);
+    TEST_ASSERT(heap != NULL);
 
-    assert(heapx_insert(heap, &first) == 0);
-    assert(heapx_insert_handle(heap, &second, &second_handle) == 0);
-    assert(heapx_insert(heap, &third) == 0);
+    TEST_ASSERT(heapx_insert(heap, &first) == 0);
+    TEST_ASSERT(heapx_insert_handle(heap, &second, &second_handle) == 0);
+    TEST_ASSERT(heapx_insert(heap, &third) == 0);
     assert_heap_invariants(heap);
 
-    assert(heapx_remove(heap, second_handle) == &second);
+    TEST_ASSERT(heapx_remove(heap, second_handle) == &second);
     assert_heap_invariants(heap);
-    assert(heapx_contains(heap, &first) != 0);
-    assert(heapx_contains(heap, &second) == 0);
+    TEST_ASSERT(heapx_contains(heap, &first) != 0);
+    TEST_ASSERT(heapx_contains(heap, &second) == 0);
 
     item = heapx_extract_min(heap);
-    assert(item == &first);
+    TEST_ASSERT(item == &first);
     item = heapx_extract_min(heap);
-    assert(item == &third);
+    TEST_ASSERT(item == &third);
 
-    assert(heapx_empty(heap));
+    TEST_ASSERT(heapx_empty(heap));
     assert_heap_invariants(heap);
     heapx_destroy(heap);
 }
@@ -318,39 +341,39 @@ static void test_invalidated_handles_are_rejected(
     struct heapx_handle reused_handle;
 
     heap = heapx_create(implementation, int_cmp);
-    assert(heap != NULL);
+    TEST_ASSERT(heap != NULL);
 
-    assert(heapx_insert_handle(heap, &values[0], &min_handle) == 0);
-    assert(heapx_insert_handle(heap, &values[1], &middle_handle) == 0);
-    assert(heapx_insert_handle(heap, &values[2], &max_handle) == 0);
+    TEST_ASSERT(heapx_insert_handle(heap, &values[0], &min_handle) == 0);
+    TEST_ASSERT(heapx_insert_handle(heap, &values[1], &middle_handle) == 0);
+    TEST_ASSERT(heapx_insert_handle(heap, &values[2], &max_handle) == 0);
     assert_heap_invariants(heap);
 
-    assert(heapx_extract_min(heap) == &values[0]);
+    TEST_ASSERT(heapx_extract_min(heap) == &values[0]);
     assert_heap_invariants(heap);
-    assert(heapx_decrease_key(heap, min_handle) == -1);
-    assert(heapx_remove(heap, min_handle) == NULL);
+    TEST_ASSERT(heapx_decrease_key(heap, min_handle) == -1);
+    TEST_ASSERT(heapx_remove(heap, min_handle) == NULL);
 
-    assert(heapx_remove(heap, middle_handle) == &values[1]);
+    TEST_ASSERT(heapx_remove(heap, middle_handle) == &values[1]);
     assert_heap_invariants(heap);
-    assert(heapx_decrease_key(heap, middle_handle) == -1);
-    assert(heapx_remove(heap, middle_handle) == NULL);
+    TEST_ASSERT(heapx_decrease_key(heap, middle_handle) == -1);
+    TEST_ASSERT(heapx_remove(heap, middle_handle) == NULL);
 
-    assert(heapx_insert_handle(heap, &values[3], &reused_handle) == 0);
+    TEST_ASSERT(heapx_insert_handle(heap, &values[3], &reused_handle) == 0);
     assert_heap_invariants(heap);
-    assert(heapx_decrease_key(heap, middle_handle) == -1);
-    assert(heapx_remove(heap, middle_handle) == NULL);
-    assert(reused_handle.slot == middle_handle.slot);
-    assert(reused_handle.generation != middle_handle.generation);
-    assert(heapx_remove(heap, reused_handle) == &values[3]);
+    TEST_ASSERT(heapx_decrease_key(heap, middle_handle) == -1);
+    TEST_ASSERT(heapx_remove(heap, middle_handle) == NULL);
+    TEST_ASSERT(reused_handle.slot == middle_handle.slot);
+    TEST_ASSERT(reused_handle.generation != middle_handle.generation);
+    TEST_ASSERT(heapx_remove(heap, reused_handle) == &values[3]);
     assert_heap_invariants(heap);
 
     values[2] = 0;
-    assert(heapx_decrease_key(heap, max_handle) == 0);
+    TEST_ASSERT(heapx_decrease_key(heap, max_handle) == 0);
     assert_heap_invariants(heap);
-    assert(heapx_extract_min(heap) == &values[2]);
+    TEST_ASSERT(heapx_extract_min(heap) == &values[2]);
     assert_heap_invariants(heap);
 
-    assert(heapx_empty(heap));
+    TEST_ASSERT(heapx_empty(heap));
     heapx_destroy(heap);
 }
 
@@ -367,23 +390,23 @@ static void test_handles_reject_wrong_heap(
 
     first_heap = heapx_create(implementation, int_cmp);
     second_heap = heapx_create(implementation, int_cmp);
-    assert(first_heap != NULL);
-    assert(second_heap != NULL);
+    TEST_ASSERT(first_heap != NULL);
+    TEST_ASSERT(second_heap != NULL);
 
-    assert(heapx_insert_handle(first_heap, &first, &first_handle) == 0);
-    assert(heapx_insert_handle(second_heap, &second, &second_handle) == 0);
+    TEST_ASSERT(heapx_insert_handle(first_heap, &first, &first_handle) == 0);
+    TEST_ASSERT(heapx_insert_handle(second_heap, &second, &second_handle) == 0);
     assert_heap_invariants(first_heap);
     assert_heap_invariants(second_heap);
 
-    assert(heapx_decrease_key(second_heap, first_handle) == -1);
-    assert(heapx_remove(second_heap, first_handle) == NULL);
-    assert(heapx_size(first_heap) == 1);
-    assert(heapx_size(second_heap) == 1);
-    assert(heapx_peek_min(first_heap) == &first);
-    assert(heapx_peek_min(second_heap) == &second);
+    TEST_ASSERT(heapx_decrease_key(second_heap, first_handle) == -1);
+    TEST_ASSERT(heapx_remove(second_heap, first_handle) == NULL);
+    TEST_ASSERT(heapx_size(first_heap) == 1);
+    TEST_ASSERT(heapx_size(second_heap) == 1);
+    TEST_ASSERT(heapx_peek_min(first_heap) == &first);
+    TEST_ASSERT(heapx_peek_min(second_heap) == &second);
 
-    assert(heapx_remove(first_heap, first_handle) == &first);
-    assert(heapx_remove(second_heap, second_handle) == &second);
+    TEST_ASSERT(heapx_remove(first_heap, first_handle) == &first);
+    TEST_ASSERT(heapx_remove(second_heap, second_handle) == &second);
     assert_heap_invariants(first_heap);
     assert_heap_invariants(second_heap);
 
@@ -404,31 +427,31 @@ static void test_decrease_key(
     struct keyed_value *item;
 
     heap = heapx_create(implementation, keyed_value_cmp);
-    assert(heap != NULL);
+    TEST_ASSERT(heap != NULL);
 
-    assert(heapx_insert_handle(heap, &slow, &slow_handle) == 0);
-    assert(heapx_insert(heap, &fast) == 0);
-    assert(heapx_insert(heap, &middle) == 0);
+    TEST_ASSERT(heapx_insert_handle(heap, &slow, &slow_handle) == 0);
+    TEST_ASSERT(heapx_insert(heap, &fast) == 0);
+    TEST_ASSERT(heapx_insert(heap, &middle) == 0);
     assert_heap_invariants(heap);
-    assert(heapx_peek_min(heap) == &fast);
+    TEST_ASSERT(heapx_peek_min(heap) == &fast);
 
     slow.priority = 5;
-    assert(heapx_decrease_key(heap, slow_handle) == 0);
+    TEST_ASSERT(heapx_decrease_key(heap, slow_handle) == 0);
     assert_heap_invariants(heap);
-    assert(heapx_peek_min(heap) == &slow);
-    assert(
+    TEST_ASSERT(heapx_peek_min(heap) == &slow);
+    TEST_ASSERT(
         heapx_decrease_key(heap, (struct heapx_handle){ 0, 0, 0 }) == -1
     );
-    assert(heapx_contains(heap, &missing) == 0);
+    TEST_ASSERT(heapx_contains(heap, &missing) == 0);
 
     item = heapx_extract_min(heap);
-    assert(item == &slow);
+    TEST_ASSERT(item == &slow);
     item = heapx_extract_min(heap);
-    assert(item == &fast);
+    TEST_ASSERT(item == &fast);
     item = heapx_extract_min(heap);
-    assert(item == &middle);
+    TEST_ASSERT(item == &middle);
 
-    assert(heapx_empty(heap));
+    TEST_ASSERT(heapx_empty(heap));
     assert_heap_invariants(heap);
     heapx_destroy(heap);
 }
@@ -459,37 +482,37 @@ static void test_targeted_operations_after_restructuring(
     size_t extracted = 0;
 
     heap = heapx_create(implementation, keyed_value_cmp);
-    assert(heap != NULL);
+    TEST_ASSERT(heap != NULL);
 
     for (i = 0; i < sizeof(values) / sizeof(values[0]); i++)
-        assert(heapx_insert_handle(heap, &values[i], &handles[i]) == 0);
+        TEST_ASSERT(heapx_insert_handle(heap, &values[i], &handles[i]) == 0);
     assert_heap_invariants(heap);
 
     item = heapx_extract_min(heap);
-    assert(item->priority == 10);
+    TEST_ASSERT(item->priority == 10);
     assert_heap_invariants(heap);
 
-    assert(heapx_remove(heap, handles[6]) == &values[6]);
-    assert(heapx_remove(heap, handles[10]) == &values[10]);
+    TEST_ASSERT(heapx_remove(heap, handles[6]) == &values[6]);
+    TEST_ASSERT(heapx_remove(heap, handles[10]) == &values[10]);
     assert_heap_invariants(heap);
-    assert(heapx_contains(heap, &values[6]) == 0);
-    assert(heapx_contains(heap, &values[10]) == 0);
+    TEST_ASSERT(heapx_contains(heap, &values[6]) == 0);
+    TEST_ASSERT(heapx_contains(heap, &values[10]) == 0);
 
     values[9].priority = 5;
-    assert(heapx_decrease_key(heap, handles[9]) == 0);
+    TEST_ASSERT(heapx_decrease_key(heap, handles[9]) == 0);
     values[2].priority = 15;
-    assert(heapx_decrease_key(heap, handles[2]) == 0);
+    TEST_ASSERT(heapx_decrease_key(heap, handles[2]) == 0);
     assert_heap_invariants(heap);
 
     previous_priority = -1;
     while (!heapx_empty(heap)) {
         item = heapx_extract_min(heap);
-        assert(item->priority >= previous_priority);
+        TEST_ASSERT(item->priority >= previous_priority);
         previous_priority = item->priority;
         extracted++;
     }
 
-    assert(extracted == 9);
+    TEST_ASSERT(extracted == 9);
     assert_heap_invariants(heap);
     heapx_destroy(heap);
 }
@@ -600,18 +623,18 @@ static void assert_randomized_heap_matches_oracle(
     size_t min_index;
     struct keyed_value *peeked;
 
-    assert(heapx_size(heap) == active_count);
-    assert(heapx_empty(heap) == (active_count == 0));
+    TEST_ASSERT(heapx_size(heap) == active_count);
+    TEST_ASSERT(heapx_empty(heap) == (active_count == 0));
 
     if (active_count == 0) {
-        assert(heapx_peek_min(heap) == NULL);
+        TEST_ASSERT(heapx_peek_min(heap) == NULL);
         return;
     }
 
-    assert(find_min_active_item(values, active, count, &min_index) == 0);
+    TEST_ASSERT(find_min_active_item(values, active, count, &min_index) == 0);
     peeked = heapx_peek_min(heap);
-    assert(peeked != NULL);
-    assert(peeked->priority == values[min_index].priority);
+    TEST_ASSERT(peeked != NULL);
+    TEST_ASSERT(peeked->priority == values[min_index].priority);
 }
 
 static void test_randomized_against_oracle(
@@ -629,17 +652,17 @@ static void test_randomized_against_oracle(
     size_t i;
     size_t step;
 
-    assert(item_count <= (size_t)INT_MAX);
+    TEST_ASSERT(item_count <= (size_t)INT_MAX);
 
-    values = malloc(item_count * sizeof(*values));
-    handles = malloc(item_count * sizeof(*handles));
-    active = malloc(item_count * sizeof(*active));
-    assert(values != NULL);
-    assert(handles != NULL);
-    assert(active != NULL);
+    values = test_array_alloc(item_count, sizeof(*values));
+    handles = test_array_alloc(item_count, sizeof(*handles));
+    active = test_array_alloc(item_count, sizeof(*active));
+    TEST_ASSERT(values != NULL);
+    TEST_ASSERT(handles != NULL);
+    TEST_ASSERT(active != NULL);
 
     heap = heapx_create(implementation, keyed_value_cmp);
-    assert(heap != NULL);
+    TEST_ASSERT(heap != NULL);
 
     for (i = 0; i < item_count; i++) {
         values[i].id = (int)i;
@@ -658,7 +681,7 @@ static void test_randomized_against_oracle(
             if (inactive_count == 0)
                 continue;
 
-            assert(
+            TEST_ASSERT(
                 select_nth_inactive_item(
                     active,
                     item_count,
@@ -668,7 +691,7 @@ static void test_randomized_against_oracle(
             );
             values[index].priority =
                 (int)(next_random(&random_state) % 1000u) - 500;
-            assert(
+            TEST_ASSERT(
                 heapx_insert_handle(
                     heap,
                     &values[index],
@@ -677,7 +700,7 @@ static void test_randomized_against_oracle(
             );
             active[index] = 1;
         } else if (choice < 65u) {
-            assert(
+            TEST_ASSERT(
                 select_nth_active_item(
                     active,
                     item_count,
@@ -687,11 +710,11 @@ static void test_randomized_against_oracle(
             );
             values[index].priority -=
                 1 + (int)(next_random(&random_state) % 50u);
-            assert(heapx_decrease_key(heap, handles[index]) == 0);
+            TEST_ASSERT(heapx_decrease_key(heap, handles[index]) == 0);
         } else if (choice < 82u) {
             struct keyed_value *removed;
 
-            assert(
+            TEST_ASSERT(
                 select_nth_active_item(
                     active,
                     item_count,
@@ -700,16 +723,16 @@ static void test_randomized_against_oracle(
                 ) == 0
             );
             removed = heapx_remove(heap, handles[index]);
-            assert(removed == &values[index]);
+            TEST_ASSERT(removed == &values[index]);
             active[index] = 0;
         } else {
             size_t min_index;
             struct keyed_value *extracted;
 
-            assert(find_min_active_item(values, active, item_count, &min_index) == 0);
+            TEST_ASSERT(find_min_active_item(values, active, item_count, &min_index) == 0);
             extracted = heapx_extract_min(heap);
-            assert(extracted != NULL);
-            assert(extracted->priority == values[min_index].priority);
+            TEST_ASSERT(extracted != NULL);
+            TEST_ASSERT(extracted->priority == values[min_index].priority);
             active[extracted->id] = 0;
         }
 
@@ -726,14 +749,14 @@ static void test_randomized_against_oracle(
         size_t min_index;
         struct keyed_value *extracted;
 
-        assert(find_min_active_item(values, active, item_count, &min_index) == 0);
+        TEST_ASSERT(find_min_active_item(values, active, item_count, &min_index) == 0);
         extracted = heapx_extract_min(heap);
-        assert(extracted != NULL);
-        assert(extracted->priority == values[min_index].priority);
+        TEST_ASSERT(extracted != NULL);
+        TEST_ASSERT(extracted->priority == values[min_index].priority);
         active[extracted->id] = 0;
     }
 
-    assert(count_active_items(active, item_count) == 0);
+    TEST_ASSERT(count_active_items(active, item_count) == 0);
     assert_heap_invariants(heap);
     heapx_destroy(heap);
     free(active);

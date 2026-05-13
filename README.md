@@ -63,11 +63,19 @@ process-local and are not updated atomically.
 
 Available implementations are:
 
-| C enum | Heap backend | Status |
-| --- | --- | --- |
-| `HEAPX_BINARY_HEAP` | Binary min-heap | implemented |
-| `HEAPX_FIBONACCI_HEAP` | Fibonacci heap | implemented |
-| `HEAPX_KAPLAN_HEAP` | Simple Fibonacci heap from "Fibonacci Heaps Revisited" | implemented |
+| C enum | Heap backend | Insert | Decrease key | Remove | Peek min | Extract min |
+| --- | --- | --- | --- | --- | --- | --- |
+| `HEAPX_BINARY_HEAP` | Binary min-heap | O(log n) | O(log n) | O(log n) | O(1) | O(log n) |
+| `HEAPX_FIBONACCI_HEAP` | Fibonacci heap | amortized O(1) | amortized O(1) | amortized O(log n) | O(1) | amortized O(log n) |
+| `HEAPX_KAPLAN_HEAP` | Simple Fibonacci heap from "Fibonacci Heaps Revisited" | amortized O(1) | amortized O(1) | amortized O(log n) | O(1) | amortized O(log n) |
+
+`contains` is not a heap-native performance operation: current backends
+implement it as an O(n) pointer-identity search.
+
+The amortized bounds above describe normal successful-operation paths. If an
+internal temporary allocation used for consolidation fails, pointer-heavy
+backends preserve heap correctness with a fallback that may postpone some
+consolidation work.
 
 ## C Example
 
@@ -192,6 +200,25 @@ Emit tab-separated benchmark output for comparing runs:
 
 ```sh
 make benchmark-heap FORMAT=tsv N=500000 SEED=123
+```
+
+Save a TSV benchmark run under `benchmarks/`:
+
+```sh
+make benchmark-heap-tsv N=500000 SEED=123
+```
+
+The default output path is derived from the item count and seed. Override it
+with `BENCHMARK_HEAP_TSV=...`:
+
+```sh
+make benchmark-heap-tsv N=500000 SEED=123 BENCHMARK_HEAP_TSV=benchmarks/before.tsv
+```
+
+Compare two saved heap benchmark TSV files:
+
+```sh
+make benchmark-heap-compare BASE=benchmarks/before.tsv HEAD=benchmarks/after.tsv
 ```
 
 Run the Dijkstra heap comparison benchmark on the default DIMACS graph:

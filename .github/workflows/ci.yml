@@ -18,23 +18,8 @@ jobs:
           gcc --version
           make --version
 
-      - name: Build library
-        run: make
-
-      - name: Run tests
-        run: make test
-
-      - name: Run sanitizer tests
-        run: make sanitize
-
-      - name: Run internal invariant debug checks
-        run: make debug-checks
-
-      - name: Run Dijkstra benchmark smoke test
-        run: make benchmark-smoke
-
-      - name: Run heap benchmark smoke test
-        run: make benchmark-heap-smoke
+      - name: Run CI checks
+        run: make ci
 
       - name: Check whitespace
         run: git diff --check

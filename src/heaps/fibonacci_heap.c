@@ -349,12 +349,16 @@ static int fibonacci_heap_reserve_degree_table(
 )
 {
     struct fibonacci_heap_node **table;
+    size_t bytes;
     size_t i;
 
     if (capacity <= heap->degree_table_capacity)
         return 0;
 
-    table = realloc(heap->degree_table, capacity * sizeof(*table));
+    if (heapx_size_mul(capacity, sizeof(*table), &bytes) != 0)
+        return -1;
+
+    table = realloc(heap->degree_table, bytes);
     if (table == NULL)
         return -1;
 
@@ -387,6 +391,7 @@ static void fibonacci_heap_consolidate(struct fibonacci_heap *heap)
     struct fibonacci_heap_node **roots;
     struct fibonacci_heap_node *current;
     size_t root_count;
+    size_t root_bytes;
     size_t degree_capacity;
     size_t max_degree = 0;
     size_t max_degree_seen = 0;
@@ -396,7 +401,12 @@ static void fibonacci_heap_consolidate(struct fibonacci_heap *heap)
     if (root_count == 0)
         return;
 
-    roots = malloc(root_count * sizeof(*roots));
+    if (heapx_size_mul(root_count, sizeof(*roots), &root_bytes) != 0) {
+        fibonacci_heap_update_minimum(heap);
+        return;
+    }
+
+    roots = malloc(root_bytes);
     if (roots == NULL) {
         fibonacci_heap_update_minimum(heap);
         return;
@@ -580,6 +590,7 @@ static int fibonacci_heap_insert_node(
     return 0;
 }
 
+/** @brief Insert an item without creating a public handle. */
 static int fibonacci_heap_insert(struct heapx_heap *base, void *item)
 {
     return fibonacci_heap_insert_node(base, item, NULL);
@@ -751,6 +762,7 @@ static int fibonacci_heap_empty(const struct heapx_heap *base)
     return fibonacci_heap_size(base) == 0;
 }
 
+/** @brief Recursively validate one circular list and its child subtrees. */
 static int fibonacci_heap_check_node_list(
     const struct fibonacci_heap *heap,
     const struct fibonacci_heap_node *node,
@@ -813,6 +825,7 @@ static int fibonacci_heap_check_node_list(
     return 0;
 }
 
+/** @brief Return 0 when Fibonacci heap roots, subtrees, and handles are valid. */
 static int fibonacci_heap_check_invariants(const struct heapx_heap *base)
 {
     const struct fibonacci_heap *heap = fibonacci_heap_from_const_base(base);
