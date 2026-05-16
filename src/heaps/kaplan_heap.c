@@ -21,16 +21,16 @@
  * decrease-key-to-minus-infinity followed by extract-min.
  */
 
-/**
- * @ingroup heap_backends
- * @brief Node stored in the Kaplan heap tree.
- *
- * Children are maintained as a doubly linked list through before/after. The
- * rank is used by fair linking during extract-min consolidation.
- *
- * The after pointer is also used to thread temporary root lists while rebuilding
- * the heap after extract-min.
- */
+ /**
+  * @ingroup heap_backends
+  * @brief Node stored in the Kaplan heap tree.
+  *
+  * Children are maintained as a doubly linked list through before/after. The
+  * rank is used by fair linking during extract-min consolidation.
+  *
+  * The after pointer is also used to thread temporary root lists while rebuilding
+  * the heap after extract-min.
+  */
 struct kaplan_heap_node {
     /** Public generational handle associated with this node. */
     struct heapx_handle handle;

@@ -150,40 +150,40 @@
  *
  */
 
-/**
- * @defgroup heapx_heap Heap API
- * @brief Public heap API for heap implementations.
- *
- * This group contains the opaque heap handle, heap implementation selectors,
- * comparator type, and operations used by C clients.
- *
- * @{
- */
+ /**
+  * @defgroup heapx_heap Heap API
+  * @brief Public heap API for heap implementations.
+  *
+  * This group contains the opaque heap handle, heap implementation selectors,
+  * comparator type, and operations used by C clients.
+  *
+  * @{
+  */
 
-/**
- * @brief Comparison function used to order elements in a heap.
- *
- * The function must return a negative value if lhs has higher priority than
- * rhs, zero if they are equivalent, and a positive value if lhs has lower
- * priority than rhs. The library never takes ownership of the pointed values.
- *
- * The comparator must define a stable ordering for all items stored in the same
- * heap. If a stored object's priority changes while it is inside the
- * heap, heap order is no longer defined by heapx.
- *
- * The comparator should behave consistently for repeated calls with the same
- * logical values. It should also avoid mutating the heap or the compared
- * objects in ways that affect their priority while a heap operation is in
- * progress.
- *
- * @param lhs First stored item.
- * @param rhs Second stored item.
- * @return Negative if lhs has higher priority, zero if equivalent, positive if
- *         rhs has higher priority.
- *
- * @warning The comparator must not dereference invalid pointers. The caller is
- *          responsible for keeping stored objects alive.
- */
+  /**
+   * @brief Comparison function used to order elements in a heap.
+   *
+   * The function must return a negative value if lhs has higher priority than
+   * rhs, zero if they are equivalent, and a positive value if lhs has lower
+   * priority than rhs. The library never takes ownership of the pointed values.
+   *
+   * The comparator must define a stable ordering for all items stored in the same
+   * heap. If a stored object's priority changes while it is inside the
+   * heap, heap order is no longer defined by heapx.
+   *
+   * The comparator should behave consistently for repeated calls with the same
+   * logical values. It should also avoid mutating the heap or the compared
+   * objects in ways that affect their priority while a heap operation is in
+   * progress.
+   *
+   * @param lhs First stored item.
+   * @param rhs Second stored item.
+   * @return Negative if lhs has higher priority, zero if equivalent, positive if
+   *         rhs has higher priority.
+   *
+   * @warning The comparator must not dereference invalid pointers. The caller is
+   *          responsible for keeping stored objects alive.
+   */
 typedef int (*heapx_cmp_fn)(const void *lhs, const void *rhs);
 
 /**

@@ -489,7 +489,8 @@ static int run_dijkstra(
                     goto done_heap;
                 neighbor->queued = 1;
                 result->inserts++;
-            } else {
+            }
+            else {
                 if (heapx_decrease_key(heap, neighbor->handle) != 0)
                     goto done_heap;
                 result->decrease_keys++;
@@ -564,7 +565,8 @@ static int run_all_implementations(
         if (i == 0) {
             expected_checksum = results[i].checksum;
             expected_reachable_count = results[i].reachable_count;
-        } else if (
+        }
+        else if (
             results[i].checksum != expected_checksum ||
             results[i].reachable_count != expected_reachable_count
             ) {

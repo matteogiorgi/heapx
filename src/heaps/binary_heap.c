@@ -16,17 +16,17 @@
  * by this backend.
  */
 
-/**
- * @ingroup heap_backends
- * @brief Concrete binary min-heap object.
- *
- * Ordering is defined entirely by the comparator stored in the embedded base
- * object. The base field must remain first so the object can be exposed as
- * struct heapx_heap.
- *
- * Invariant: for every occupied index except the root, the parent item has
- * priority less than or equal to the child item according to base.cmp().
- */
+ /**
+  * @ingroup heap_backends
+  * @brief Concrete binary min-heap object.
+  *
+  * Ordering is defined entirely by the comparator stored in the embedded base
+  * object. The base field must remain first so the object can be exposed as
+  * struct heapx_heap.
+  *
+  * Invariant: for every occupied index except the root, the parent item has
+  * priority less than or equal to the child item according to base.cmp().
+  */
 struct binary_heap {
     /** Common heapx_heap base. Must be the first field. */
     struct heapx_heap base;

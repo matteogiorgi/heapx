@@ -15,16 +15,16 @@
  * rule.
  */
 
-/**
- * @ingroup heap_backends
- * @brief Node stored in a circular-list Fibonacci heap.
- *
- * Root lists and child lists are circular doubly linked lists. The item pointer
- * is caller-owned and is compared through the heap's common base comparator.
- *
- * When the node is alone in a list, left and right both point back to the node.
- * A node with parent == NULL is in the root list.
- */
+ /**
+  * @ingroup heap_backends
+  * @brief Node stored in a circular-list Fibonacci heap.
+  *
+  * Root lists and child lists are circular doubly linked lists. The item pointer
+  * is caller-owned and is compared through the heap's common base comparator.
+  *
+  * When the node is alone in a list, left and right both point back to the node.
+  * A node with parent == NULL is in the root list.
+  */
 struct fibonacci_heap_node {
     /** Public generational handle associated with this node. */
     struct heapx_handle handle;
@@ -226,7 +226,8 @@ static void fibonacci_heap_add_child(
         child->left = child;
         child->right = child;
         parent->child = child;
-    } else {
+    }
+    else {
         fibonacci_heap_list_insert_after(parent->child, child);
     }
 
@@ -668,7 +669,8 @@ static void *fibonacci_heap_remove(
     if (parent != NULL) {
         fibonacci_heap_remove_child(parent, node);
         fibonacci_heap_cascading_cut(heap, parent);
-    } else {
+    }
+    else {
         fibonacci_heap_list_remove(node);
     }
 
@@ -735,7 +737,8 @@ static void *fibonacci_heap_extract_min(struct heapx_heap *base)
 
     if (minimum->right == minimum) {
         heap->minimum = NULL;
-    } else {
+    }
+    else {
         heap->minimum = minimum->right;
         fibonacci_heap_list_remove(minimum);
     }

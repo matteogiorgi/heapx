@@ -511,7 +511,8 @@ static int print_result(
             result->checksum,
             __VERSION__
         );
-    } else {
+    }
+    else {
         printf(
             "%-9s %-16s n=%zu seconds=%.6f ops=%" PRIu64
             " ops_per_sec=%.0f checksum=%" PRIu64 "\n",
@@ -545,9 +546,11 @@ int main(int argc, char **argv)
 
             if (strcmp(value, "text") == 0) {
                 format = OUTPUT_TEXT;
-            } else if (strcmp(value, "tsv") == 0) {
+            }
+            else if (strcmp(value, "tsv") == 0) {
                 format = OUTPUT_TSV;
-            } else {
+            }
+            else {
                 fprintf(stderr, "invalid format: %s\n", value);
                 return 2;
             }

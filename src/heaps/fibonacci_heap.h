@@ -8,21 +8,21 @@
  * @brief Private Fibonacci heap backend factory.
  */
 
-/**
- * @addtogroup heap_backends
- * @{
- */
+ /**
+  * @addtogroup heap_backends
+  * @{
+  */
 
-/**
- * @brief Create a heapx_heap backed by a Fibonacci heap.
- *
- * This is a private factory used by the public heapx_create()
- * dispatcher. The returned object must be handled only through the abstract
- * heapx_heap API.
- *
- * @param cmp Comparator used to order stored items.
- * @return A new heap, or NULL if allocation fails.
- */
+  /**
+   * @brief Create a heapx_heap backed by a Fibonacci heap.
+   *
+   * This is a private factory used by the public heapx_create()
+   * dispatcher. The returned object must be handled only through the abstract
+   * heapx_heap API.
+   *
+   * @param cmp Comparator used to order stored items.
+   * @return A new heap, or NULL if allocation fails.
+   */
 struct heapx_heap *fibonacci_heap_create(heapx_cmp_fn cmp);
 
 /** @} */

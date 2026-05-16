@@ -25,35 +25,35 @@
  * implementation selection.
  */
 
-/**
- * @defgroup internals Heap Internals
- * @brief Private dispatch and object-layout helpers used by heap backends.
- *
- * These declarations are not part of the installed public API. They are
- * documented for maintainers and for experiments that add new heap backends.
- * A new backend should provide one concrete object whose first field is struct
- * heapx_heap, one static heapx_vtable, and one private factory
- * used by heapx_create().
- *
- * @{
- */
+ /**
+  * @defgroup internals Heap Internals
+  * @brief Private dispatch and object-layout helpers used by heap backends.
+  *
+  * These declarations are not part of the installed public API. They are
+  * documented for maintainers and for experiments that add new heap backends.
+  * A new backend should provide one concrete object whose first field is struct
+  * heapx_heap, one static heapx_vtable, and one private factory
+  * used by heapx_create().
+  *
+  * @{
+  */
 
-/**
- * @brief Implementation dispatch table for the heapx_heap API.
- *
- * Each concrete backend provides one static vtable and implements all entries
- * using the common base pointer. Public functions perform basic NULL handling
- * before dispatching through this table.
- *
- * Vtable functions may assume their heap argument is non-NULL and points to
- * the correct concrete object. Targeted-operation callbacks receive the
- * already validated backend owner pointer associated with a live generational
- * handle. They should preserve the public ownership contract: stored items
- * remain caller-owned, and destroy callbacks release only backend-owned storage
- * inside the concrete heap object. The common dispatch layer releases the
- * handle slot table and the concrete heap allocation itself after the destroy
- * callback returns.
- */
+  /**
+   * @brief Implementation dispatch table for the heapx_heap API.
+   *
+   * Each concrete backend provides one static vtable and implements all entries
+   * using the common base pointer. Public functions perform basic NULL handling
+   * before dispatching through this table.
+   *
+   * Vtable functions may assume their heap argument is non-NULL and points to
+   * the correct concrete object. Targeted-operation callbacks receive the
+   * already validated backend owner pointer associated with a live generational
+   * handle. They should preserve the public ownership contract: stored items
+   * remain caller-owned, and destroy callbacks release only backend-owned storage
+   * inside the concrete heap object. The common dispatch layer releases the
+   * handle slot table and the concrete heap allocation itself after the destroy
+   * callback returns.
+   */
 struct heapx_vtable {
     /** Release backend-owned storage. The heap pointer is never NULL here. */
     void (*destroy)(struct heapx_heap *heap);
@@ -64,17 +64,17 @@ struct heapx_vtable {
         struct heapx_heap *heap,
         void *item,
         struct heapx_handle *out
-    );
+        );
     /** Repair heap order after a stored item moves closer to the minimum. */
     int (*decrease_key)(
         struct heapx_heap *heap,
         void *owner
-    );
+        );
     /** Remove one stored item by handle and return the item pointer. */
     void *(*remove)(
         struct heapx_heap *heap,
         void *owner
-    );
+        );
     /** Return non-zero if the heap stores item by pointer identity. */
     int (*contains)(const struct heapx_heap *heap, const void *item);
     /** Return the current minimum item from a valid heap, or NULL if empty. */

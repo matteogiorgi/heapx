@@ -41,13 +41,13 @@ union heapx_pool_block {
  * unsupported implementations, missing comparators, and NULL heap handles.
  */
 
-/**
- * @ingroup internals
- * @brief Initialize the base object shared by all concrete heaps.
- *
- * Constructors call this after allocating their concrete object. No heap
- * invariant is established here beyond storing the vtable and comparator.
- */
+ /**
+  * @ingroup internals
+  * @brief Initialize the base object shared by all concrete heaps.
+  *
+  * Constructors call this after allocating their concrete object. No heap
+  * invariant is established here beyond storing the vtable and comparator.
+  */
 void heapx_heap_init(
     struct heapx_heap *heap,
     const struct heapx_vtable *vtable,
@@ -128,7 +128,8 @@ int heapx_handle_attach(
         index = heap->free_handle_slot;
         slot = &heap->handle_slots[index];
         heap->free_handle_slot = slot->next_free;
-    } else {
+    }
+    else {
         if (heap->handle_slot_count == heap->handle_slot_capacity) {
             new_capacity = heap->handle_slot_capacity == 0 ?
                 8 : heap->handle_slot_capacity * 2;
