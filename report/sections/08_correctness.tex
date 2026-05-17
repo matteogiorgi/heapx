@@ -1,0 +1,141 @@
+\chapter{Correctness and Invariants}
+
+\section{Testing Philosophy}
+
+The test suite is designed to check the public API across all backends.
+Each backend is run through the same scenarios, so failures reveal either backend-specific bugs or inconsistencies in the common API contract.
+
+The tests use a custom \texttt{TEST\_ASSERT} macro rather than the standard \texttt{assert}.
+This keeps tests active even in optimized \texttt{-DNDEBUG} builds.
+
+\section{Deterministic Tests}
+
+The deterministic tests cover:
+
+\begin{itemize}
+    \item rejecting missing comparators;
+    \item behavior of empty heaps;
+    \item insertion and sorted extraction;
+    \item duplicate priorities;
+    \item interleaved insertion and extraction;
+    \item larger deterministic ordering;
+    \item \texttt{contains} and remove;
+    \item remove by handle identity rather than by priority equality;
+    \item stale handle rejection;
+    \item wrong-heap handle rejection;
+    \item decrease-key behavior;
+    \item targeted operations after backend restructuring.
+\end{itemize}
+
+These cases are important because several bugs in heap implementations are not visible through simple insert/extract tests.
+Handles, restructuring, and stale references are more demanding.
+
+\section{Randomized Oracle Test}
+
+The randomized test maintains a simple external oracle.
+It randomly performs inserts, decrease-key operations, removes, and extract-min operations.
+After each step, it compares heap state with the oracle:
+
+\begin{itemize}
+    \item heap size matches active item count;
+    \item empty state matches active item count;
+    \item peek-min matches the minimum active item;
+    \item extracted items match oracle minima.
+\end{itemize}
+
+The default seed is deterministic.
+The seed, number of items, and number of steps can be overridden:
+
+\begin{lstlisting}[style=shellstyle, caption={Longer randomized campaign.}]
+HEAPX_TEST_SEED=123 \
+HEAPX_TEST_ITEMS=512 \
+HEAPX_TEST_STEPS=20000 \
+make test
+\end{lstlisting}
+
+\section{Common Invariants}
+
+\texttt{heapx\_check\_invariants()} first validates common state:
+
+\begin{itemize}
+    \item heap pointer is non-null;
+    \item vtable and comparator are present;
+    \item heap id is non-zero;
+    \item handle slot count does not exceed capacity;
+    \item handle table pointer and capacity agree;
+    \item free-list links are valid and acyclic within the slot count;
+    \item free slots do not claim live owners or items.
+\end{itemize}
+
+After the common checks, the function dispatches to the backend invariant checker.
+
+\section{Binary Heap Invariants}
+
+The binary heap checker verifies:
+
+\begin{itemize}
+    \item size does not exceed capacity;
+    \item array pointer and capacity agree;
+    \item every locator points back to its current array index;
+    \item every locator resolves through the public handle table;
+    \item every parent compares no worse than its children.
+\end{itemize}
+
+This checks both algorithmic heap order and handle consistency.
+
+\section{Fibonacci Heap Invariants}
+
+The Fibonacci checker recursively validates circular root and child lists.
+It checks:
+
+\begin{itemize}
+    \item empty heaps have no minimum pointer;
+    \item non-empty heaps have a minimum pointer;
+    \item roots have no parent;
+    \item the minimum pointer is not worse than any root;
+    \item sibling links are bidirectionally consistent;
+    \item child parent pointers are correct;
+    \item child count matches node degree;
+    \item child nodes do not violate heap order with their parent;
+    \item handled nodes resolve to themselves;
+    \item counted nodes match heap size.
+\end{itemize}
+
+\section{Kaplan Heap Invariants}
+
+The Kaplan checker validates a different structure:
+
+\begin{itemize}
+    \item reusable rank table entries are clear between consolidations;
+    \item empty heaps have no root;
+    \item non-empty heaps have exactly one root tree;
+    \item root parent and sibling links are null;
+    \item child and sibling links are consistent;
+    \item mark bits are valid;
+    \item ranks do not exceed heap size or direct child count;
+    \item heap order holds between parent and child;
+    \item handled nodes resolve to themselves;
+    \item counted nodes match heap size.
+\end{itemize}
+
+These checks are especially valuable because the Kaplan backend uses rank-state repairs and temporary root lists during extract-min.
+
+\section{Sanitizers and CI}
+
+The Makefile provides several verification targets:
+
+\begin{lstlisting}[style=shellstyle, caption={Verification targets.}]
+make test
+make debug-checks
+make sanitize
+make leak-check
+make optimized-check
+make ci
+\end{lstlisting}
+
+\begin{itemize}
+    \item \texttt{make sanitize} enables AddressSanitizer and UndefinedBehaviorSanitizer.
+    \item \texttt{make leak-check} runs leak detection where supported.
+    \item \texttt{make optimized-check} tests with \texttt{-O2 -DNDEBUG}.
+    \item The CI workflow runs \texttt{make ci} and checks whitespace with \texttt{git diff --check}.
+\end{itemize}

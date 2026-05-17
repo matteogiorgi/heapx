@@ -1,0 +1,58 @@
+\chapter{Introduction}
+
+Priority queues are a central building block in graph algorithms, scheduling systems, simulation engines, discrete-event systems, and optimization routines.
+Heap data structures are one of the most common ways to implement priority queues because they provide efficient access to the current minimum or maximum element while keeping the representation compact.
+
+heapx is a compact C99 project focused specifically on heap implementations.
+The project has two complementary goals.
+The first goal is practical: provide a small, documented heap API that client code can use without depending on backend-specific representations.
+The second goal is experimental: compare several heap backends behind the same interface, so differences in implementation strategy, complexity, allocation behavior, and benchmark performance can be studied in a controlled way.
+
+\section{Motivation}
+
+Many descriptions of heaps stop at asymptotic complexity.
+In real C code, however, the engineering details matter:
+
+\begin{itemize}
+    \item an array-based heap has predictable storage and good locality;
+    \item pointer-heavy heaps can offer better amortized decrease-key complexity, but require more metadata and careful list manipulation;
+    \item arbitrary remove and decrease-key need a stable way to refer to stored items;
+    \item benchmark results depend on workload, memory behavior, compiler options, and input data;
+    \item correctness is not only the heap-order property, but also ownership, stale handles, allocation failures, and API edge cases.
+\end{itemize}
+
+heapx is designed to make these aspects visible rather than hiding them.
+The repository is therefore not only a library, but also a small algorithm-engineering workspace.
+
+\section{Guiding Question}
+
+The guiding question of the project is:
+
+\begin{quote}
+    Can different heap backends be exposed through one compact C API while preserving clear ownership rules, safe targeted operations, useful benchmark comparisons, and maintainable backend implementations?
+\end{quote}
+
+The current codebase compares three implementations:
+
+\begin{itemize}
+    \item a binary min-heap backed by a contiguous array;
+    \item a classical Fibonacci heap following the amortized design of Fredman and Tarjan \cite{fredman1987fibonacci};
+    \item a simple Fibonacci heap inspired by the formulation of Kaplan, Tarjan, and Zwick \cite{kaplan2014fibonacci}, referred to in the code as the Kaplan heap.
+\end{itemize}
+
+\section{Professional Constraints}
+
+Even though heapx is experimental, it is developed with professional constraints in mind.
+The public API is documented through Doxygen.
+The repository has deterministic tests, randomized oracle checks, internal invariant checks, sanitizer targets, leak-check support, benchmark smoke tests, TSV benchmark output, and CI-oriented Makefile targets.
+
+The project is intentionally narrow.
+It is not meant to become a broad collection of unrelated data structures.
+The stable surface is heap-shaped, and new work should deepen the heap comparison rather than dilute the repository with unrelated abstractions.
+
+\section{Report Structure}
+
+The report follows the structure of the codebase.
+It first describes the public API and the theoretical background.
+It then discusses the internal architecture, generational handles, backend implementations, memory management, correctness strategy, and benchmark methodology.
+The final chapters summarize the current validation status, limitations, and future work.

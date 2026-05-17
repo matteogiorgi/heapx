@@ -1,0 +1,84 @@
+\chapter{Generational Handles}
+\label{chap:handles}
+
+\section{Motivation}
+
+Decrease-key and arbitrary remove require a way to locate an existing item inside a heap.
+If the library searched for the item by pointer identity, targeted operations would become linear and the advertised heap complexity would be misleading.
+heapx therefore exposes insertion handles.
+
+The insert-with-handle operation returns a handle.
+That handle can later be passed to the decrease-key or remove operations.
+Plain \texttt{heapx\_insert()} does not create a public handle.
+
+\section{Handle Representation}
+
+The public handle is a small value type:
+
+\begin{lstlisting}[style=cstyle, caption={Public handle representation.}]
+struct heapx_handle {
+    uint64_t heap_id;
+    size_t slot;
+    unsigned generation;
+};
+\end{lstlisting}
+
+It contains the logical heap identifier, the slot index in the heap's common handle table, and the generation observed when the handle was created.
+The handle owns no memory and can be copied by the caller.
+
+\section{Handle Slot Table}
+
+The common base object stores a handle slot table.
+Each slot records the caller-owned item pointer, a backend-owned owner pointer, the current generation, a live bit, and a free-list link.
+
+\begin{lstlisting}[style=cstyle, caption={Internal handle slot.}]
+struct heapx_handle_slot {
+    void *item;
+    void *owner;
+    unsigned generation;
+    int live;
+    size_t next_free;
+};
+\end{lstlisting}
+
+When a handled item is inserted, heapx either reuses a free slot or grows the slot table geometrically.
+When the item is removed or extracted, the slot is marked non-live, its generation is incremented, and the slot is pushed onto the free list.
+
+\section{Stale Handle Protection}
+
+Generations prevent stale handles from becoming valid again after slot reuse.
+Suppose an item is inserted into slot $s$ with generation $g$.
+After the item is removed, the slot generation becomes $g + 1$.
+If the same slot is later reused for another item, the old handle still contains generation $g$, so resolution fails.
+
+The heap identifier prevents handles from one heap being used on another heap.
+This is tested explicitly in the test suite.
+
+\section{Backend Owner Pointers}
+
+The handle table stores a backend owner pointer.
+This pointer is private to the backend and has different meanings depending on the implementation:
+
+\begin{itemize}
+    \item the binary heap stores a stable locator object whose \texttt{index} tracks the current array position;
+    \item the Fibonacci heap stores the node pointer directly;
+    \item the Kaplan heap stores the node pointer directly.
+\end{itemize}
+
+Public targeted operations resolve a handle to this owner pointer before dispatching to the backend.
+The backend does not need to know about heap identifiers or slot generations; it receives the local object needed to perform the algorithmic repair.
+
+\section{Binary Heap Locators}
+
+The binary heap is array-based, so item positions change during sift-up, sift-down, extract-min, and remove.
+A public handle cannot point directly to an array slot because array entries move.
+The backend therefore allocates stable locator objects.
+Each locator stores the public handle and the current array index.
+Whenever an entry is moved, \texttt{binary\_heap\_store\_entry()} refreshes the locator's index.
+
+This is an important implementation detail because it lets the binary heap support the same targeted API as pointer-based heaps.
+
+\section{Failure Behavior}
+
+If handle attachment fails during insertion, the backend rolls back the partially allocated backend metadata and the item is not inserted.
+This preserves the public contract: on failed insert, the caller remains the sole owner of the item and the heap is unchanged from the caller's perspective.

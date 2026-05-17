@@ -1,0 +1,429 @@
+\documentclass[10pt,aspectratio=43]{beamer}
+
+\usepackage[english]{babel}
+\usepackage{fontspec}
+\setmainfont{Latin Modern Roman}
+\setsansfont{Latin Modern Sans}
+\setmonofont{Cascadia Code}[Scale=0.88]
+\usepackage{amsmath, amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{listings}
+
+\usetheme{default}
+\usecolortheme{default}
+\setbeamertemplate{navigation symbols}{}
+\setbeamertemplate{caption}[numbered]
+\setbeamersize{text margin left=8mm,text margin right=8mm}
+
+\definecolor{projectblue}{RGB}{24, 70, 125}
+\definecolor{projectgray}{RGB}{82, 91, 103}
+
+\setbeamercolor{structure}{fg=projectblue}
+\setbeamercolor{frametitle}{fg=projectblue}
+\setbeamercolor{title}{fg=projectblue}
+\setbeamercolor{normal text}{fg=black}
+\setbeamercolor{block title}{fg=white,bg=projectblue}
+\setbeamercolor{block body}{fg=black,bg=projectblue!5}
+\setbeamercolor{footline}{fg=projectgray}
+
+\setbeamertemplate{frametitle}{%
+    \vspace{0.45em}
+    \insertframetitle\par
+    \vspace{0.25em}
+    {\color{projectblue!35}\rule{\linewidth}{0.5pt}}
+}
+\setbeamertemplate{footline}{%
+    \hfill
+    \usebeamercolor[fg]{footline}
+    \scriptsize\insertframenumber/\inserttotalframenumber
+    \hspace{0.8em}\vspace{0.45em}
+}
+
+\lstdefinestyle{cstyle}{
+    language=C,
+    basicstyle=\ttfamily\scriptsize,
+    keywordstyle=\color{blue!60!black},
+    commentstyle=\color{green!40!black},
+    stringstyle=\color{red!50!black},
+    showstringspaces=false,
+    breaklines=true,
+    columns=fullflexible,
+    keepspaces=true,
+    frame=single,
+    rulecolor=\color{black!20},
+    backgroundcolor=\color{black!2}
+}
+
+\lstdefinestyle{shellstyle}{
+    language=bash,
+    basicstyle=\ttfamily\scriptsize,
+    keywordstyle=\color{blue!60!black},
+    commentstyle=\color{green!40!black},
+    stringstyle=\color{red!50!black},
+    showstringspaces=false,
+    breaklines=true,
+    columns=fullflexible,
+    keepspaces=true,
+    frame=single,
+    rulecolor=\color{black!20},
+    backgroundcolor=\color{black!2}
+}
+
+\newcommand{\projecttitle}{heapx}
+\newcommand{\projectsubtitle}{A Compact Experimental C Library for Heap Data Structures}
+
+\title{\projecttitle}
+\subtitle{\projectsubtitle}
+\author{heapx project}
+\institute{C99 data structures and algorithm engineering}
+\date{\today}
+
+\begin{document}
+
+\begin{frame}{Title and Objective}
+    \vspace{0.4em}
+    {\Large\bfseries\color{projectblue}\projecttitle}
+
+    \vspace{0.4em}
+    {\large \projectsubtitle}
+
+    \vspace{1.1em}
+    \begin{block}{Objective}
+        Compare multiple heap implementations behind one stable C API while making API contracts, correctness checks, memory behavior, and benchmarks explicit.
+    \end{block}
+
+    \vfill
+    \small heapx project \hfill C99 data structures and algorithm engineering
+\end{frame}
+
+\begin{frame}{Motivation}
+    Priority queues are central in graph algorithms, scheduling, simulations, and optimization.
+
+    \vspace{0.5em}
+    heapx studies the engineering side of heap implementations while staying intentionally narrow:
+    \begin{itemize}
+        \item one C99 heap-shaped API, not a broad container library;
+        \item private backend representations selected at creation time;
+        \item array storage versus pointer-heavy node structures;
+        \item worst-case versus amortized complexity;
+        \item targeted operations through handles;
+        \item reproducible tests, invariants, documentation, and benchmarks.
+    \end{itemize}
+
+    \vspace{0.4em}
+    \begin{block}{Guiding question}
+        Can different heap backends share one compact API without hiding their trade-offs?
+    \end{block}
+\end{frame}
+
+\begin{frame}[fragile]{Public API}
+    The public API exposes an opaque heap handle and selects the backend only at creation time.
+
+    \begin{lstlisting}[style=cstyle]
+struct heapx_heap *heapx_create(
+    enum heapx_implementation implementation,
+    heapx_cmp_fn cmp
+);
+
+int heapx_insert(struct heapx_heap *heap, void *item);
+int heapx_insert_handle(
+    struct heapx_heap *heap,
+    void *item,
+    struct heapx_handle *out
+);
+int heapx_decrease_key(struct heapx_heap *heap,
+                       struct heapx_handle handle);
+void *heapx_remove(struct heapx_heap *heap,
+                   struct heapx_handle handle);
+    \end{lstlisting}
+\end{frame}
+
+\begin{frame}{API Contract}
+    The API contract is deliberately explicit:
+
+    \begin{itemize}
+        \item stored objects are caller-owned \texttt{void *} pointers;
+        \item ordering is defined by \texttt{heapx\_cmp\_fn};
+        \item equal-priority extraction order is not stable;
+        \item \texttt{NULL} heap behavior is defined in public functions;
+        \item \texttt{contains} is linear and diagnostic, not heap-native performance API;
+        \item no internal synchronization is provided.
+    \end{itemize}
+
+    \vspace{0.5em}
+    The public layer owns common edge cases so backends can focus on algorithms.
+\end{frame}
+
+\begin{frame}{Complexity Summary}
+    The implemented backends occupy different points in the heap design space:
+    array-based worst-case bounds, classic amortized structures, and a simpler Fibonacci-style variant.
+
+    \vspace{0.4em}
+    \begin{center}
+        \begin{tabular}{llll}
+            \toprule
+            Backend        & Insert      & Decrease key & Extract min     \\
+            \midrule
+            Binary heap    & $O(\log n)$ & $O(\log n)$  & $O(\log n)$     \\
+            Fibonacci heap & am. $O(1)$  & am. $O(1)$   & am. $O(\log n)$ \\
+            Kaplan heap    & am. $O(1)$  & am. $O(1)$   & am. $O(\log n)$ \\
+            \bottomrule
+        \end{tabular}
+    \end{center}
+
+    \vspace{0.6em}
+    \begin{itemize}
+        \item \texttt{remove}: $O(\log n)$ for binary, amortized $O(\log n)$ for Fibonacci-style heaps.
+        \item \texttt{peek\_min}, \texttt{size}, \texttt{empty}: $O(1)$.
+        \item \texttt{contains}: $O(n)$ in all current backends.
+    \end{itemize}
+\end{frame}
+
+\begin{frame}{Internal Architecture}
+    \begin{block}{Core idea}
+        One public dispatch layer, multiple private backend implementations.
+    \end{block}
+
+    \vspace{0.4em}
+    \begin{itemize}
+        \item Concrete heaps embed \texttt{struct heapx\_heap} as their first field.
+        \item The base object stores comparator, vtable, heap id, and handle slots.
+        \item Public functions validate common behavior and dispatch through the vtable.
+        \item Backends own their storage, repair algorithms, and invariant checks.
+    \end{itemize}
+\end{frame}
+
+\begin{frame}[fragile]{Vtable Model}
+    The internal vtable mirrors the public heap operations.
+
+    \begin{lstlisting}[style=cstyle]
+struct heapx_vtable {
+    void (*destroy)(struct heapx_heap *heap);
+    int (*insert)(struct heapx_heap *heap, void *item);
+    int (*decrease_key)(struct heapx_heap *heap,
+                        void *owner);
+    void *(*remove)(struct heapx_heap *heap,
+                    void *owner);
+    void *(*extract_min)(struct heapx_heap *heap);
+    int (*check_invariants)(const struct heapx_heap *heap);
+};
+    \end{lstlisting}
+
+    Targeted operations receive an already resolved backend owner pointer.
+\end{frame}
+
+\begin{frame}{Generational Handles}
+    Decrease-key and arbitrary remove need a stable reference to an item position.
+
+    \vspace{0.4em}
+    A heapx handle contains:
+    \begin{itemize}
+        \item logical heap id;
+        \item slot index in the common handle table;
+        \item slot generation.
+    \end{itemize}
+
+    \vspace{0.5em}
+    \begin{block}{Safety property}
+        Stale handles and handles from another heap fail cleanly, even when internal slots are reused.
+    \end{block}
+\end{frame}
+
+\begin{frame}{Handle Owners}
+    The common handle table maps a public handle to a backend owner pointer.
+
+    \begin{center}
+        \begin{tabular}{lll}
+            \toprule
+            Backend        & Owner pointer  & Why                \\
+            \midrule
+            Binary heap    & Stable locator & Array entries move \\
+            Fibonacci heap & Node pointer   & Nodes are stable   \\
+            Kaplan heap    & Node pointer   & Nodes are stable   \\
+            \bottomrule
+        \end{tabular}
+    \end{center}
+
+    \vspace{0.5em}
+    This keeps public handle validation common while allowing backend-specific repair logic.
+\end{frame}
+
+\begin{frame}{Binary Heap Backend}
+    Binary heap implementation:
+
+    \begin{itemize}
+        \item dynamic array of entries;
+        \item zero-based parent/child index arithmetic;
+        \item \texttt{sift\_up} after insertion and decrease-key;
+        \item \texttt{sift\_down} after extract-min;
+        \item \texttt{repair\_at} after arbitrary remove;
+        \item stable locators for handled entries.
+    \end{itemize}
+
+    \vspace{0.5em}
+    \begin{block}{Trade-off}
+        Weaker decrease-key bound than Fibonacci-style heaps, but simple code and cache-friendly storage.
+    \end{block}
+\end{frame}
+
+\begin{frame}{Fibonacci Heap Backend}
+    Fibonacci heap implementation:
+
+    \begin{itemize}
+        \item circular root and child lists;
+        \item parent pointers, degree, and mark bits;
+        \item insert adds a singleton root;
+        \item decrease-key performs cut plus cascading cuts;
+        \item extract-min promotes children and consolidates roots by degree;
+        \item reusable degree table for consolidation.
+    \end{itemize}
+
+    \vspace{0.5em}
+    Designed around amortized $O(1)$ insert and decrease-key.
+\end{frame}
+
+\begin{frame}{Kaplan Heap Backend}
+    Kaplan heap implementation:
+
+    \begin{itemize}
+        \item simple Fibonacci heap variant;
+        \item steady state is one heap-ordered tree;
+        \item insertion links a singleton node against the root;
+        \item decrease-key performs cascading rank/state changes and one cut;
+        \item extract-min consolidates children with fair links by rank;
+        \item remove structurally simulates decrease-to-minus-infinity plus extract-min.
+    \end{itemize}
+
+    \vspace{0.5em}
+    It is algorithmically close to Fibonacci heaps, but the repair mechanism is different.
+\end{frame}
+
+\begin{frame}{Memory and Allocation Safety}
+    heapx separates caller-owned items from heap-owned metadata.
+
+    \vspace{0.4em}
+    \begin{itemize}
+        \item Stored items are never copied or freed by heapx.
+        \item Allocation size arithmetic uses centralized overflow checks.
+        \item Pointer-heavy backends use fixed-size node pools.
+        \item Pool slots are aligned for backend node structs.
+        \item Temporary consolidation allocation failures preserve correctness through fallback behavior.
+    \end{itemize}
+
+    \vspace{0.4em}
+    The goal is predictable failure behavior, not only fast successful paths.
+\end{frame}
+
+\begin{frame}{Correctness Strategy}
+    The test strategy combines local and global checks.
+
+    \begin{itemize}
+        \item deterministic tests for edge cases and public API behavior;
+        \item randomized oracle test with inserts, decrease-key, remove, extract and peek;
+        \item common invariant checks for handles and base state;
+        \item backend-specific invariant checks;
+        \item ASan, UBSan, leak-check and optimized builds;
+        \item Dijkstra checksum agreement across backends.
+    \end{itemize}
+\end{frame}
+
+\begin{frame}{Invariant Examples}
+    \begin{itemize}
+        \item \textbf{Common layer}: valid vtable, comparator, heap id, handle slot free list.
+        \item \textbf{Binary heap}: parent-child order, locator index consistency, handle resolution.
+        \item \textbf{Fibonacci heap}: circular links, parent pointers, degree counts, minimum root.
+        \item \textbf{Kaplan heap}: single root, rank constraints, sibling links, cleared rank table.
+    \end{itemize}
+
+    \vspace{0.6em}
+    Invariants are run after successful mutations when internal checks are enabled.
+\end{frame}
+
+\begin{frame}[fragile]{Benchmark Methodology}
+    Two benchmark layers:
+
+    \begin{itemize}
+        \item \textbf{Heap-only}: isolates operation mixes such as insert-only, decrease-only, drain, and mixed handles.
+        \item \textbf{Dijkstra}: exercises insert-handle, decrease-key and extract-min inside a shortest-path workload.
+    \end{itemize}
+
+    \vspace{0.4em}
+    \begin{lstlisting}[style=shellstyle]
+make benchmark-heap-tsv N=500000 SEED=123
+make benchmark-heap-compare BASE=before.tsv HEAD=after.tsv
+
+make benchmark GRAPH=graphs/dimacs/USA-road-d.USA.gr SOURCE=1
+    \end{lstlisting}
+\end{frame}
+
+\begin{frame}{Benchmark Interpretation}
+    Benchmarks are empirical evidence for this implementation and workload.
+
+    \vspace{0.4em}
+    Results depend on:
+    \begin{itemize}
+        \item compiler and optimization flags;
+        \item machine and cache behavior;
+        \item allocator behavior;
+        \item graph structure and operation mix;
+        \item frequency of decrease-key.
+    \end{itemize}
+
+    \vspace{0.4em}
+    Smoke tests validate execution and consistency; large datasets are needed for strong performance claims.
+\end{frame}
+
+\begin{frame}{Current Status}
+    \begin{block}{What is already in place}
+        A compact public API over three heap backends, with tests, invariant checks, sanitizer targets, benchmark tooling, Doxygen documentation, report, and presentation.
+    \end{block}
+
+    \vspace{0.5em}
+    \begin{itemize}
+        \item The architecture is stable and backend-oriented.
+        \item Targeted operations are safe through generational handles.
+        \item Benchmarks can be saved and compared as TSV.
+        \item The repository remains focused on heap data structures.
+    \end{itemize}
+\end{frame}
+
+\begin{frame}{Limitations and Next Steps}
+    The current state is professional enough to study, but still experimental.
+
+    \vspace{0.4em}
+    \begin{columns}[T,onlytextwidth]
+        \begin{column}{0.48\textwidth}
+            \textbf{Limitations}
+            \begin{itemize}
+                \item preliminary benchmark conclusions;
+                \item linear \texttt{contains};
+                \item no synchronization or custom allocator API;
+                \item no stable ordering for equal priorities.
+            \end{itemize}
+        \end{column}
+        \begin{column}{0.48\textwidth}
+            \textbf{Next steps}
+            \begin{itemize}
+                \item larger fixed benchmark campaigns;
+                \item reproducible benchmark summaries;
+                \item optional analyzer CI jobs;
+                \item continued invariant documentation.
+            \end{itemize}
+        \end{column}
+    \end{columns}
+\end{frame}
+
+\begin{frame}{Takeaway}
+    \begin{block}{Main takeaway}
+        heapx is an algorithm-engineering workspace: one heap-shaped API, multiple private backends, and tooling to compare correctness and performance without changing client code.
+    \end{block}
+
+    \vspace{0.7em}
+    For a 30-minute discussion, the interesting point is not only which heap is faster.
+    It is how API design, handles, memory management, invariants, and benchmarks make that comparison trustworthy.
+\end{frame}
+
+\end{document}

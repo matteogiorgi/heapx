@@ -1,0 +1,46 @@
+\chapter{Conclusions and Next Steps}
+
+heapx is a compact but credible experimental heap library.
+Its core design, one stable public API over multiple private backends, makes it possible to compare heap implementations without changing client code.
+The project is intentionally narrow, but within that narrow scope it already contains many professional engineering elements.
+
+\section{Current Strengths}
+
+The main strengths are:
+
+\begin{itemize}
+    \item clear separation between public API and backend implementation;
+    \item explicit caller ownership of stored items;
+    \item generational handles for safe targeted operations;
+    \item documented complexity bounds;
+    \item binary, Fibonacci, and Kaplan heap backends;
+    \item backend-specific invariant validation;
+    \item randomized oracle tests;
+    \item sanitizer and leak-check workflows;
+    \item TSV benchmark output and comparison tooling;
+    \item Doxygen API documentation;
+    \item a LaTeX report and presentation for project communication.
+\end{itemize}
+
+\section{Most Important Next Steps}
+
+The most valuable next steps are:
+
+\begin{itemize}
+    \item run larger benchmark campaigns on fixed DIMACS datasets;
+    \item store selected benchmark summaries in a reproducible form;
+    \item add optional CI jobs for additional compilers and analyzers;
+    \item keep backend invariants documented as implementations evolve;
+    \item evaluate whether future heap variants require API changes;
+    \item avoid adding unrelated data structures that would dilute the project focus.
+\end{itemize}
+
+\section{Final Assessment}
+
+The project is best understood as an algorithm-engineering workspace rather than only a library.
+The public API provides a stable surface.
+The backends expose different algorithmic trade-offs.
+The tests and benchmarks make those trade-offs inspectable.
+
+For a professional experimental repository, this is the right direction.
+Future work should deepen the evidence around the existing heap implementations: correctness under stress, behavior under allocation pressure, benchmark performance across workload families, and careful documentation of any deviation between theoretical bounds and practical behavior.

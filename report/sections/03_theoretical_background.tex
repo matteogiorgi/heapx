@@ -1,0 +1,79 @@
+\chapter{Theoretical Background}
+
+\section{Priority Queues}
+
+A priority queue stores items under an ordering relation and supports repeated access to the item with highest priority.
+In heapx, the highest-priority item is the one that compares first according to the user-supplied comparator.
+The API names this item the minimum because the natural comparator for ascending numeric keys returns smaller values first.
+
+Priority queues are frequently analyzed through the cost of insertion, minimum extraction, and priority decrease.
+The relative importance of these operations depends on the workload.
+For example, Dijkstra's shortest-path algorithm performs extract-min operations and may perform many decrease-key operations \cite{dijkstra1959note}.
+
+\section{Binary Heap}
+
+The binary heap stores elements in an array and interprets the array as a complete binary tree \cite{cormen2009introduction}.
+For a zero-based array index $i$, the structural relationships are:
+
+\begin{align}
+    parent(i) & = \left\lfloor \frac{i - 1}{2} \right\rfloor, \\
+    left(i)   & = 2i + 1,                                     \\
+    right(i)  & = 2i + 2.
+\end{align}
+
+The min-heap invariant requires every parent to compare no worse than its children.
+Insertion appends a new item at the end of the array and restores order by sifting upward.
+Extracting the minimum removes the root, moves the last entry to the root, and restores order by sifting downward.
+
+The binary heap is simple and cache-friendly.
+Its main costs are:
+
+\begin{itemize}
+    \item insert: $O(\log n)$;
+    \item decrease-key: $O(\log n)$ when the item position is known;
+    \item remove: $O(\log n)$ when the item position is known;
+    \item peek-min: $O(1)$;
+    \item extract-min: $O(\log n)$.
+\end{itemize}
+
+\section{Fibonacci Heap}
+
+Fibonacci heaps use a collection of heap-ordered trees and obtain strong amortized bounds \cite{fredman1987fibonacci}.
+Insertion adds a singleton tree to the root list.
+Decrease-key cuts a node from its parent if heap order is violated and then applies cascading cuts.
+Extract-min removes the minimum root, promotes its children, and consolidates roots so that no two roots have the same degree.
+
+The relevant amortized bounds are:
+
+\begin{itemize}
+    \item insert: amortized $O(1)$;
+    \item decrease-key: amortized $O(1)$;
+    \item remove: amortized $O(\log n)$;
+    \item peek-min: $O(1)$;
+    \item extract-min: amortized $O(\log n)$.
+\end{itemize}
+
+The implementation cost is higher than for a binary heap.
+Nodes need parent, child, sibling links, degree metadata, and mark bits.
+This is a useful trade-off to study because theoretical complexity and measured performance can diverge when pointer chasing, allocation, and cache locality dominate.
+
+\section{Simple Fibonacci or Kaplan Heap}
+
+The Kaplan backend follows the simple Fibonacci heap idea described by Kaplan, Tarjan, and Zwick \cite{kaplan2014fibonacci}.
+In the heapx implementation, the steady-state representation is a single heap-ordered tree.
+Insertion links a singleton node against the root using a naive link.
+Extract-min removes the root, treats its children as temporary roots, performs fair links among roots with equal rank, and then folds the remaining roots back into one tree.
+
+Decrease-key differs from the classic Fibonacci heap.
+Instead of cascading cuts, the Kaplan backend performs cascading rank and state changes followed by one structural cut.
+This makes it an interesting contrast with the classic Fibonacci backend: both aim at efficient decrease-key behavior, but their internal repairs are different.
+
+\section{Worst-Case and Amortized Complexity}
+
+The report distinguishes worst-case bounds from amortized bounds.
+The binary heap operations have straightforward worst-case logarithmic behavior.
+The Fibonacci-style heaps rely on amortized analysis: individual operations may perform more work, but sequences of operations satisfy the documented average-over-sequence bounds.
+
+This distinction matters when interpreting benchmarks.
+A benchmark result is an empirical measurement of this implementation, compiled with a particular toolchain, running on a particular machine, under a particular workload.
+It should be read together with the theoretical bounds, not as a substitute for them.

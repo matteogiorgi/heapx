@@ -1,0 +1,112 @@
+\chapter{Public API and Design Contract}
+
+\section{Opaque Heap Handle}
+
+Client code interacts with heapx through an opaque \texttt{struct heapx\_heap}.
+The concrete backend layout is private.
+This prevents callers from depending on implementation details and allows the same public functions to dispatch to different heap implementations.
+
+\begin{lstlisting}[style=cstyle, caption={Creating a heap through the public API.}]
+struct heapx_heap *heapx_create(
+    enum heapx_implementation implementation,
+    heapx_cmp_fn cmp
+);
+\end{lstlisting}
+
+The backend is selected at construction time through \texttt{enum heapx\_implementation}.
+After creation, client code uses the same operations regardless of whether the heap is backed by a binary heap, a Fibonacci heap, or the Kaplan heap.
+
+\section{Comparator Contract}
+
+heapx stores generic \texttt{void *} items.
+Ordering is defined by a caller-provided comparator:
+
+\begin{lstlisting}[style=cstyle, caption={Comparator type.}]
+typedef int (*heapx_cmp_fn)(const void *lhs, const void *rhs);
+\end{lstlisting}
+
+A negative result means that \texttt{lhs} has higher priority and should appear closer to the minimum.
+The library therefore implements min-priority behavior relative to the comparator, not relative to a fixed numeric key.
+
+The comparator must remain valid for the lifetime of the heap.
+It should define a consistent ordering for all objects stored in the same heap.
+If a stored object is mutated so that its priority improves, the caller must use \texttt{heapx\_decrease\_key()} with the item's handle.
+If the object is mutated in the opposite direction, heapx does not provide a repair operation for that case.
+
+\section{Ownership}
+
+The library never owns stored items.
+It stores item pointers exactly as provided by the caller:
+
+\begin{itemize}
+    \item heapx does not copy item objects;
+    \item heapx does not free item objects;
+    \item destroying a heap releases only heap-owned metadata;
+    \item callers must keep stored objects valid until they are removed or the heap is destroyed.
+\end{itemize}
+
+This design is idiomatic for a small C library and keeps heapx independent from item lifetime policies.
+It also makes the allocation behavior of heap metadata easier to reason about during benchmarks.
+
+\section{Core Operations}
+
+The public operations are intentionally narrow:
+
+\begin{lstlisting}[style=cstyle, caption={Core heap operations.}]
+int heapx_insert(struct heapx_heap *heap, void *item);
+int heapx_insert_handle(
+    struct heapx_heap *heap,
+    void *item,
+    struct heapx_handle *out
+);
+int heapx_decrease_key(
+    struct heapx_heap *heap,
+    struct heapx_handle handle
+);
+void *heapx_remove(
+    struct heapx_heap *heap,
+    struct heapx_handle handle
+);
+void *heapx_peek_min(const struct heapx_heap *heap);
+void *heapx_extract_min(struct heapx_heap *heap);
+size_t heapx_size(const struct heapx_heap *heap);
+int heapx_empty(const struct heapx_heap *heap);
+\end{lstlisting}
+
+\texttt{heapx\_insert()} is suitable when the caller only needs normal priority queue behavior.
+\texttt{heapx\_insert\_handle()} additionally returns a handle that can later be used for targeted operations.
+
+\section{Targeted Operations}
+
+\texttt{heapx\_decrease\_key()} and \texttt{heapx\_remove()} operate on handles, not by searching for an item pointer.
+This is important for preserving the intended complexity of heap operations.
+Searching for an arbitrary pointer would be linear and would obscure the algorithmic behavior of the backend.
+
+The handle mechanism is discussed in detail in Chapter~\ref{chap:handles}.
+At the API level, the important contract is simple:
+
+\begin{itemize}
+    \item a handle is live only while the associated item remains stored in the heap that created it;
+    \item after extraction or removal, the handle becomes stale;
+    \item stale handles fail cleanly;
+    \item handles from another heap fail cleanly.
+\end{itemize}
+
+\section{Defined Edge Cases}
+
+The public dispatch layer centralizes common edge cases.
+\texttt{heapx\_destroy(NULL)} does nothing.
+\texttt{heapx\_size(NULL)} returns zero.
+\texttt{heapx\_empty(NULL)} treats a null heap as empty.
+\texttt{peek\_min} and \texttt{extract\_min} return \texttt{NULL} for a null or empty heap.
+Insert and decrease-key operations return \texttt{-1} when the heap pointer or handle is invalid.
+
+These rules make backend implementations simpler because public null-handling is not duplicated in every backend.
+
+\section{The Role of contains}
+
+\texttt{heapx\_contains()} checks pointer identity.
+It is useful as a convenience query and as a diagnostic operation in tests, but it is not a heap-native performance primitive.
+The current backends implement it as a linear search.
+
+For this reason, complexity tables and benchmark interpretation should focus on insert, insert-handle, decrease-key, remove, peek-min, extract-min, size, and empty.

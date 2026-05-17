@@ -1,0 +1,82 @@
+\chapter{Current Results and Discussion}
+
+\section{Complexity Summary}
+
+The current backends expose the same public operations but have different theoretical costs.
+Table~\ref{tab:complexity-summary} summarizes the documented bounds for heap-native operations.
+
+\begin{table}[H]
+    \centering
+    \begin{tabular}{llllll}
+        \toprule
+        Backend        & Insert      & Decrease    & Remove          & Peek   & Extract         \\
+        \midrule
+        Binary heap    & $O(\log n)$ & $O(\log n)$ & $O(\log n)$     & $O(1)$ & $O(\log n)$     \\
+        Fibonacci heap & am. $O(1)$  & am. $O(1)$  & am. $O(\log n)$ & $O(1)$ & am. $O(\log n)$ \\
+        Kaplan heap    & am. $O(1)$  & am. $O(1)$  & am. $O(\log n)$ & $O(1)$ & am. $O(\log n)$ \\
+        \bottomrule
+    \end{tabular}
+    \caption{Complexity summary for heap-native public operations.}
+    \label{tab:complexity-summary}
+\end{table}
+
+\texttt{contains} is intentionally excluded from the table.
+It is currently linear in all backends and should not be used as a performance-critical operation.
+
+\section{Validation Status}
+
+The repository currently supports the following checks:
+
+\begin{itemize}
+    \item normal C test suite;
+    \item debug checks with internal invariants enabled;
+    \item AddressSanitizer and UndefinedBehaviorSanitizer;
+    \item leak-check target when supported by the environment;
+    \item optimized test and smoke benchmark run;
+    \item Doxygen documentation build;
+    \item whitespace check in CI.
+\end{itemize}
+
+This is a strong validation baseline for an experimental C project.
+It does not prove absence of bugs, but it covers many classes of regression: API edge cases, stale handles, structural invariants, memory safety, undefined behavior, and benchmark smoke consistency.
+
+\section{Engineering Status}
+
+Several pieces make the repository more robust than a minimal algorithm demonstration:
+
+\begin{itemize}
+    \item centralized overflow checks for allocation size arithmetic;
+    \item generational handles with wrong-heap and stale-handle rejection;
+    \item backend-specific invariant checkers;
+    \item node pools for metadata reuse;
+    \item fallback behavior for temporary consolidation allocation failures;
+    \item deterministic randomized tests;
+    \item TSV benchmark output and comparison tooling;
+    \item hardened DIMACS parser.
+\end{itemize}
+
+These features support the experimental goal.
+When a backend changes, the repository has tools to evaluate correctness, memory behavior, and performance-sensitive scenarios through the same public API.
+
+\section{Expected Performance Trade-Offs}
+
+The binary heap should be expected to perform well on many practical workloads because it uses contiguous storage and simple loops.
+Even though its decrease-key is $O(\log n)$, the constant factors and cache locality may be favorable.
+
+The Fibonacci and Kaplan heaps should be most interesting on workloads with many decrease-key operations.
+Their theoretical advantage is amortized decrease-key behavior.
+However, they use pointer-heavy structures, node metadata, and consolidation tables.
+Therefore, their practical performance depends heavily on workload and machine characteristics.
+
+The Dijkstra benchmark is useful because it exercises a real mixture of insert-handle, decrease-key, and extract-min operations.
+The heap-only benchmark is useful because it isolates specific operation patterns.
+Both are needed.
+
+\section{Smoke Tests Versus Experimental Results}
+
+The repository includes a tiny DIMACS graph for smoke testing.
+This is appropriate for CI because it is fast and deterministic.
+It is not a serious performance dataset.
+
+Large road-network datasets can be used locally.
+For stronger experimental claims, the project should define a fixed benchmark suite, record machine and compiler information, run multiple repetitions, and store summarized results in the report or in a separate tracked experiment note.

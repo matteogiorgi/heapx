@@ -1,0 +1,123 @@
+\chapter{Benchmark Methodology}
+
+\section{Benchmark Goals}
+
+heapx benchmarks are designed to answer two different questions.
+The heap-only benchmark asks how the heap API and backend algorithms behave in isolation.
+The Dijkstra benchmark asks how the backends behave inside a graph algorithm that naturally uses decrease-key.
+
+Both benchmarks also act as consistency checks.
+They compute checksums or verify monotonic extraction so performance runs can detect obvious behavioral regressions.
+
+\section{Heap-Only Benchmark}
+
+\texttt{tests/heap\_benchmark.c} runs all three backends over the same set of scenarios.
+Items contain a key, an id, a live flag, and an optional handle.
+The comparator orders by key and then id, making benchmark ordering deterministic even when keys collide.
+
+\subsection{Scenarios}
+
+The benchmark scenarios are:
+
+\begin{itemize}
+    \item \texttt{insert\_only}: measures insertion and minimum maintenance without draining the heap;
+    \item \texttt{first\_extract}: builds a heap and extracts only the first minimum;
+    \item \texttt{insert\_extract}: inserts all items and drains the heap, verifying monotonic order;
+    \item \texttt{decrease\_only}: inserts handled items, decreases all priorities, and checks the new minimum;
+    \item \texttt{decrease\_extract}: inserts handled items, decreases priorities, and drains the heap;
+    \item \texttt{mixed\_handles}: combines handled insertion, remove, decrease-key, and extraction.
+\end{itemize}
+
+This scenario split is useful because different heaps should excel on different workloads.
+For example, decrease-heavy workloads are where Fibonacci-style heaps are theoretically attractive, while insert/extract workloads often favor simpler memory layouts.
+
+\subsection{Determinism and Output}
+
+The benchmark uses a deterministic 64-bit linear congruential generator.
+The seed can be passed from the command line or through Makefile variables.
+Output can be human-readable or TSV.
+
+\begin{lstlisting}[style=shellstyle, caption={Heap benchmark commands.}]
+make benchmark-heap
+make benchmark-heap N=500000 SEED=123
+make benchmark-heap FORMAT=tsv N=500000 SEED=123
+\end{lstlisting}
+
+The TSV output records implementation, scenario, item count, seed, elapsed seconds, operation count, operations per second, checksum, and compiler version.
+
+\section{TSV Comparison Workflow}
+
+The Makefile can save benchmark TSV files and compare two runs:
+
+\begin{lstlisting}[style=shellstyle, caption={Saving and comparing benchmark runs.}]
+make benchmark-heap-tsv N=500000 SEED=123 \
+  BENCHMARK_HEAP_TSV=benchmarks/before.tsv
+
+make benchmark-heap-tsv N=500000 SEED=123 \
+  BENCHMARK_HEAP_TSV=benchmarks/after.tsv
+
+make benchmark-heap-compare \
+  BASE=benchmarks/before.tsv \
+  HEAD=benchmarks/after.tsv
+\end{lstlisting}
+
+Generated TSV files are ignored by git.
+This keeps the repository clean while still making local performance comparisons repeatable.
+
+\section{Dijkstra Benchmark}
+
+\texttt{tests/dijkstra\_benchmark.c} loads a DIMACS shortest-path graph, converts it into compressed sparse row form, and runs Dijkstra's algorithm with each heap backend.
+
+Each graph node stores:
+
+\begin{itemize}
+    \item node id;
+    \item current distance;
+    \item finalized flag;
+    \item queued flag;
+    \item heap handle.
+\end{itemize}
+
+When relaxation improves the distance of a node already in the heap, the benchmark calls \texttt{heapx\_decrease\_key()}.
+When the node is not queued, it calls \texttt{heapx\_insert\_handle()}.
+
+\section{DIMACS Parser}
+
+The DIMACS parser is deliberately stricter than a quick benchmark parser.
+It checks:
+
+\begin{itemize}
+    \item line length;
+    \item problem-line uniqueness;
+    \item problem type;
+    \item numeric limits;
+    \item arc count consistency;
+    \item tail and head range;
+    \item unsupported line tags;
+    \item allocation overflow in graph arrays.
+\end{itemize}
+
+This matters because benchmark inputs can be large.
+A permissive parser could hide errors in datasets or cause undefined behavior on oversized inputs.
+
+\section{Cross-Backend Consistency}
+
+After each Dijkstra run, the benchmark computes a checksum over final distances and counts reachable nodes.
+All backends must agree.
+This makes the benchmark more than a timing tool: it is also an end-to-end consistency check for targeted operations under a realistic workload.
+
+\section{Interpreting Results}
+
+Benchmark results should be interpreted carefully.
+They depend on:
+
+\begin{itemize}
+    \item compiler and optimization flags;
+    \item machine and cache behavior;
+    \item allocator behavior;
+    \item item count;
+    \item graph structure;
+    \item ratio of insert, decrease-key, remove, and extract-min operations.
+\end{itemize}
+
+The project therefore records enough metadata to compare runs, but avoids claiming universal performance conclusions from smoke tests.

@@ -1,0 +1,116 @@
+\chapter{Architecture}
+
+\section{Overview}
+
+heapx is organized around a small public dispatch layer and several private backends.
+The public layer lives primarily in \texttt{src/heap.c}.
+It owns backend selection, common handle validation, null-handling, invariant dispatch, node-pool utilities, and allocation-size helpers.
+
+Each backend lives in \texttt{src/heaps/}.
+The backend is responsible for its own structural representation and algorithmic repairs.
+This split keeps the public API contract consistent while allowing each heap implementation to use a different internal model.
+
+\section{Common Base Object}
+
+Every concrete backend embeds \texttt{struct heapx\_heap} as its first field.
+This is a common C pattern for implementing a small form of object-oriented dispatch.
+Because the base is first, a pointer to the concrete object can be safely exposed as a pointer to the base object, and backend code can cast it back to the concrete type.
+
+\begin{lstlisting}[style=cstyle, caption={Simplified common base object.}]
+struct heapx_heap {
+    const struct heapx_vtable *vtable;
+    heapx_cmp_fn cmp;
+    uint64_t id;
+    struct heapx_handle_slot *handle_slots;
+    size_t handle_slot_count;
+    size_t handle_slot_capacity;
+    size_t free_handle_slot;
+};
+\end{lstlisting}
+
+The common base contains only state that is shared by all implementations.
+Concrete storage such as arrays, root pointers, node pools, consolidation tables, and rank tables belongs to the backend structs.
+
+\section{Vtable Dispatch}
+
+The internal vtable mirrors the public heap API.
+Public functions validate their common preconditions, then call the backend implementation through the vtable.
+
+\begin{lstlisting}[style=cstyle, caption={Simplified vtable shape.}]
+struct heapx_vtable {
+    void (*destroy)(struct heapx_heap *heap);
+    int (*insert)(struct heapx_heap *heap, void *item);
+    int (*insert_handle)(
+        struct heapx_heap *heap,
+        void *item,
+        struct heapx_handle *out
+    );
+    int (*decrease_key)(struct heapx_heap *heap, void *owner);
+    void *(*remove)(struct heapx_heap *heap, void *owner);
+    int (*contains)(const struct heapx_heap *heap, const void *item);
+    void *(*peek_min)(const struct heapx_heap *heap);
+    void *(*extract_min)(struct heapx_heap *heap);
+    size_t (*size)(const struct heapx_heap *heap);
+    int (*empty)(const struct heapx_heap *heap);
+    int (*check_invariants)(const struct heapx_heap *heap);
+};
+\end{lstlisting}
+
+The key design choice is that targeted vtable operations receive an already resolved backend owner pointer.
+For example, public \texttt{heapx\_decrease\_key()} resolves the handle once and then calls the backend with the node or locator associated with that handle.
+This avoids duplicating public handle validation in every backend.
+
+\section{Factory Function}
+
+\texttt{heapx\_create()} validates the comparator and dispatches construction to the selected backend factory.
+Unsupported implementation selectors return \texttt{NULL}.
+
+\begin{lstlisting}[style=cstyle, caption={Factory logic, simplified.}]
+switch (implementation) {
+case HEAPX_BINARY_HEAP:
+    heap = binary_heap_create(cmp);
+    break;
+case HEAPX_FIBONACCI_HEAP:
+    heap = fibonacci_heap_create(cmp);
+    break;
+case HEAPX_KAPLAN_HEAP:
+    heap = kaplan_heap_create(cmp);
+    break;
+default:
+    return NULL;
+}
+\end{lstlisting}
+
+The factory also enables invariant checks after successful construction when internal checks are enabled.
+
+\section{Public Dispatch Responsibilities}
+
+The public layer owns behavior that should be independent of backend:
+
+\begin{itemize}
+    \item rejecting a missing comparator;
+    \item accepting \texttt{heapx\_destroy(NULL)};
+    \item returning defined values for null heap queries;
+    \item resolving handles before targeted operations;
+    \item running invariant checks after successful mutations;
+    \item releasing the common handle table during destruction.
+\end{itemize}
+
+This keeps backend code focused on heap algorithms.
+It also makes the API easier to document because edge-case behavior is centralized.
+
+\section{Backend Responsibilities}
+
+Backends own:
+
+\begin{itemize}
+    \item concrete storage layout;
+    \item insertion and repair algorithms;
+    \item remove and extract-min algorithms;
+    \item pointer-identity search for \texttt{contains};
+    \item backend-specific invariant checking;
+    \item backend-owned metadata allocation and release.
+\end{itemize}
+
+The separation is especially useful in an experimental repository.
+Adding a new backend requires a concrete object, a static vtable, invariant checks, and a factory, while the public API remains unchanged.

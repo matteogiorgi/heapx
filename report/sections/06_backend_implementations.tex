@@ -1,0 +1,136 @@
+\chapter{Backend Implementations}
+
+\section{Binary Heap Backend}
+
+The binary heap backend stores entries in a contiguous dynamic array.
+Each entry contains the caller-owned item pointer and an optional locator pointer for handled items.
+
+\begin{lstlisting}[style=cstyle, caption={Binary heap entry model.}]
+struct binary_heap_handle {
+    void *item;
+    struct binary_heap_locator *locator;
+};
+\end{lstlisting}
+
+The array contains no sentinel.
+When the heap is non-empty, the minimum item is at index zero.
+Insertion appends a new entry and calls \texttt{binary\_heap\_sift\_up()}.
+Extract-min removes the root, moves the last entry to the root, and calls \texttt{binary\_heap\_sift\_down()}.
+
+\subsection{Repair After Local Changes}
+
+\texttt{binary\_heap\_repair\_at()} is used after arbitrary removal.
+After a removed entry is replaced by the last entry, the replacement may need to move either upward or downward.
+The helper checks the parent relation first.
+If the replacement compares before its parent, it sifts upward; otherwise it sifts downward.
+
+This keeps arbitrary remove at $O(\log n)$.
+
+\subsection{Capacity Growth}
+
+The binary heap grows its array geometrically.
+Capacity starts at eight and doubles when needed.
+Size multiplication is checked through the common overflow helper before calling \texttt{realloc}.
+After reallocation, locators are refreshed so handled entries still point to the correct array positions.
+
+\section{Fibonacci Heap Backend}
+
+The Fibonacci heap backend stores a circular root list of heap-ordered trees.
+Each node stores:
+
+\begin{itemize}
+    \item caller-owned item pointer;
+    \item optional public handle;
+    \item parent pointer;
+    \item one child pointer;
+    \item left and right sibling pointers;
+    \item degree;
+    \item mark bit.
+\end{itemize}
+
+\subsection{Insertion}
+
+Insertion allocates a node and adds it to the root list.
+No consolidation is performed during insertion.
+If the new item compares before the current minimum, the minimum pointer is updated.
+
+\subsection{Decrease-Key}
+
+When an item's priority improves, the caller mutates the item and then calls the public decrease-key operation.
+The Fibonacci backend checks whether the node now violates heap order with respect to its parent.
+If so, it cuts the node from its parent, adds it to the root list, and applies cascading cuts to ancestors that have already lost a child.
+
+This implements the classic mark-bit mechanism used to obtain amortized $O(1)$ decrease-key.
+
+\subsection{Extract-Min and Consolidation}
+
+Extract-min removes the current minimum root, promotes its children to roots, and consolidates the root list by degree.
+The implementation snapshots the current roots into a temporary array before linking roots.
+This avoids traversing a circular list while mutating it.
+
+The degree table is reused across extract-min calls.
+It is sized from the maximum degree and root count seen in the current consolidation.
+If allocation for the temporary roots array or degree table fails, the backend preserves correctness by rescanning the root list for the minimum and skipping consolidation for that operation.
+This is a deliberate failure-mode choice: correctness is more important than preserving the ideal amortized structure after an allocation failure.
+
+\section{Kaplan Heap Backend}
+
+The Kaplan backend implements the simple Fibonacci heap variant used by this project.
+Unlike the classic Fibonacci backend, the steady-state representation is one heap-ordered tree rooted at \texttt{heap->root}.
+Children are stored in doubly linked sibling lists.
+Each node has a rank and a mark/state bit.
+
+\subsection{Insertion}
+
+Insertion creates a singleton node and links it against the current root.
+The better-priority node remains root and the other becomes a child.
+This is called a naive link in the implementation.
+
+\subsection{Decrease-Key}
+
+The Kaplan decrease-key repair is different from the Fibonacci backend.
+If the decreased node is not the root, the backend performs cascading rank and state changes up the parent chain.
+Then it cuts the node once and links it against the root.
+
+This distinction is central to the backend's experimental value.
+Both Fibonacci and Kaplan heaps aim at efficient decrease-key behavior, but they repair the structure differently.
+
+\subsection{Extract-Min}
+
+Extract-min removes the root and consolidates its children.
+Children are treated as temporary roots.
+Roots with equal rank are combined with fair links, incrementing the resulting root's rank.
+The remaining roots are then folded into a single tree with naive links.
+
+As with the Fibonacci backend, the rank table is reusable and allocation failures fall back to a correctness-preserving reconstruction.
+If the table cannot be allocated, the backend links roots naively.
+
+\subsection{Remove by Handle}
+
+The public API does not expose a backend-independent minus-infinity key.
+The Kaplan backend therefore simulates removal structurally.
+For a non-root node, it performs the rank repair, detaches the target, makes the old root one of the target's children, installs the target as root, and then reuses extract-min.
+
+This is a good example of why the report should discuss implementation details rather than only public API behavior.
+The public operation is simply \texttt{remove(handle)}, but the backend algorithm is specialized.
+
+\section{Backend Comparison}
+
+\begin{table}[H]
+    \centering
+    \begin{tabular}{llll}
+        \toprule
+        Backend   & Primary storage     & Target owner   & Main trade-off                \\
+        \midrule
+        Binary    & Dynamic array       & Stable locator & Locality and simplicity       \\
+        Fibonacci & Circular node lists & Node pointer   & Strong amortized bounds       \\
+        Kaplan    & Single tree         & Node pointer   & Different decrease-key repair \\
+        \bottomrule
+    \end{tabular}
+    \caption{High-level implementation comparison.}
+    \label{tab:backend-comparison}
+\end{table}
+
+The binary heap has weaker decrease-key complexity but a simpler memory layout.
+The Fibonacci-style heaps have better amortized decrease-key behavior but more metadata and pointer manipulation.
+The benchmarks are therefore necessary: asymptotic complexity explains the design space, but implementation details influence measured performance.

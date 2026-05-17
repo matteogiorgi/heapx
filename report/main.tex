@@ -1,0 +1,125 @@
+\documentclass[11pt,a4paper]{report}
+
+\usepackage[T1]{fontenc}
+\usepackage[english]{babel}
+\usepackage{fontspec}
+\setmainfont{Latin Modern Roman}
+\setmonofont{Cascadia Code}[Scale=0.88]
+\usepackage{geometry}
+\usepackage{microtype}
+\usepackage{amsmath, amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{float}
+\usepackage{titlesec}
+
+\geometry{margin=2.6cm}
+
+\titleformat{\chapter}[hang]
+    {\normalfont\huge\bfseries}
+    {\thechapter}
+    {1em}
+    {}
+\titlespacing*{\chapter}{0pt}{-0.5em}{1.8em}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue!50!black,
+    citecolor=blue!50!black,
+    urlcolor=blue!50!black
+}
+
+\lstdefinestyle{cstyle}{
+    language=C,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue!60!black},
+    commentstyle=\color{green!40!black},
+    stringstyle=\color{red!50!black},
+    showstringspaces=false,
+    breaklines=true,
+    columns=fullflexible,
+    keepspaces=true,
+    frame=single,
+    rulecolor=\color{black!20},
+    backgroundcolor=\color{black!2}
+}
+
+\lstdefinestyle{shellstyle}{
+    language=bash,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue!60!black},
+    commentstyle=\color{green!40!black},
+    stringstyle=\color{red!50!black},
+    showstringspaces=false,
+    breaklines=true,
+    columns=fullflexible,
+    keepspaces=true,
+    frame=single,
+    rulecolor=\color{black!20},
+    backgroundcolor=\color{black!2}
+}
+
+\newcommand{\projecttitle}{heapx: A Compact Experimental C Library for Heap Data Structures}
+\newenvironment{projectabstract}
+    {\chapter*{Abstract}\addcontentsline{toc}{chapter}{Abstract}}
+    {\clearpage}
+\newcommand{\placeholderfigure}[1]{%
+    \fbox{%
+        \begin{minipage}[c][5cm][c]{0.88\linewidth}
+            \centering
+            \small Figure not yet available: #1
+        \end{minipage}
+    }%
+}
+\newcommand{\maybeincludegraphics}[2][]{%
+    \IfFileExists{#2}{%
+        \includegraphics[#1]{#2}%
+    }{%
+        \placeholderfigure{#2}%
+    }%
+}
+
+\title{\projecttitle}
+\author{heapx project}
+\date{\today}
+
+\begin{document}
+
+\pagenumbering{roman}
+\maketitle
+\setcounter{page}{2}
+
+\begin{projectabstract}
+    heapx is a compact C99 library and experimental workspace for comparing heap data structures behind one stable public API.
+    The project implements a binary min-heap, a classical Fibonacci heap, and the simple Fibonacci heap described by Kaplan, Tarjan, and Zwick.
+    The library stores caller-owned \texttt{void *} items, exposes targeted operations through generational handles, and keeps backend-specific details hidden behind an internal dispatch layer.
+    This report documents the design, theoretical background, implementation choices, validation strategy, and current benchmark methodology of the project.
+    The goal is to keep heapx small enough for experimentation while applying professional engineering practices: explicit ownership rules, overflow-aware allocation helpers, invariant checks, sanitizer runs, reproducible benchmarks, and generated API documentation.
+\end{projectabstract}
+
+\tableofcontents
+\newpage
+\pagenumbering{arabic}
+
+\input{sections/01_introduction}
+\input{sections/02_public_api}
+\input{sections/03_theoretical_background}
+\input{sections/04_architecture}
+\input{sections/05_handles}
+\input{sections/06_backend_implementations}
+\input{sections/07_memory_management}
+\input{sections/08_correctness}
+\input{sections/09_benchmark_methodology}
+\input{sections/10_results_discussion}
+\input{sections/11_limitations}
+\input{sections/12_conclusions}
+
+\bibliographystyle{plain}
+\bibliography{references}
+
+\end{document}

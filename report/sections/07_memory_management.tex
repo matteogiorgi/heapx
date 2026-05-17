@@ -1,0 +1,75 @@
+\chapter{Memory and Allocation Safety}
+
+\section{Caller-Owned Items}
+
+heapx never owns the objects stored in the heap.
+The library owns only backend metadata: array entries, locators, node wrappers, handle slots, and temporary tables.
+This distinction is essential for a generic C library because the library cannot know how caller objects should be copied or destroyed.
+
+Destroying a heap releases heap-owned metadata.
+It does not call destructors for stored item pointers.
+
+\section{Overflow-Aware Size Arithmetic}
+
+Allocation sizes are checked centrally through two helpers:
+
+\begin{lstlisting}[style=cstyle, caption={Centralized size arithmetic helpers.}]
+int heapx_size_mul(size_t left, size_t right, size_t *out);
+int heapx_size_add(size_t left, size_t right, size_t *out);
+\end{lstlisting}
+
+These helpers return \texttt{-1} on overflow.
+They are used in library allocation paths, tests, and benchmarks.
+This matters because the project intentionally supports scalable experiments: heap item counts, DIMACS graph sizes, CSR arrays, handle tables, consolidation tables, and benchmark item arrays all require size arithmetic.
+
+\section{Node Pool}
+
+Pointer-heavy backends allocate many fixed-size node wrappers.
+heapx uses a fixed-size node pool to recycle these objects.
+The pool allocates blocks of object slots and maintains a free list.
+
+\begin{lstlisting}[style=cstyle, caption={Node pool state.}]
+struct heapx_node_pool {
+    size_t object_size;
+    size_t block_capacity;
+    void *free_list;
+    union heapx_pool_block *blocks;
+};
+\end{lstlisting}
+
+The pool stores backend metadata only.
+It does not own or inspect caller items.
+
+\section{Alignment}
+
+The pool rounds object sizes up to an alignment at least as strict as \texttt{void *} and \texttt{long double}.
+The allocation block is represented by a union that forces suitable alignment before the object payload.
+
+This is a low-level but important C detail.
+Without it, pooled objects could be returned at addresses that are invalid for the backend structs stored there.
+
+\section{Allocation Failure Policy}
+
+heapx follows a conservative failure policy:
+
+\begin{itemize}
+    \item constructors return \texttt{NULL};
+    \item insert operations return \texttt{-1};
+    \item failed insertions do not transfer item ownership;
+    \item handle attachment failures roll back backend metadata;
+    \item temporary consolidation allocation failures preserve heap correctness.
+\end{itemize}
+
+The Fibonacci and Kaplan backends deserve special mention.
+During consolidation, temporary arrays or reusable tables may need to grow.
+If that allocation fails, the implementation chooses a correctness-preserving fallback.
+The heap remains valid, but the ideal consolidation work may be reduced or postponed.
+
+\section{What Is Not Provided}
+
+heapx currently does not expose a custom allocator interface.
+All heap-owned metadata uses the C allocation functions directly.
+This keeps the API small, but it is a limitation if the library is later used in environments with strict allocation policies.
+
+The project also does not shrink arrays or tables aggressively.
+This is intentional for now: the current focus is correctness, stable behavior, and meaningful benchmark comparison rather than minimizing retained metadata after transient peaks.

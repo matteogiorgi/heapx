@@ -1,0 +1,61 @@
+\chapter{Limitations}
+
+\section{Performance Claims}
+
+The repository has benchmark tooling, but it does not yet contain a curated set of large, repeated benchmark results.
+Current smoke tests validate functionality and rough benchmark execution.
+They should not be interpreted as broad performance conclusions.
+
+Future performance claims should specify:
+
+\begin{itemize}
+    \item hardware;
+    \item compiler and flags;
+    \item dataset;
+    \item item count;
+    \item number of repetitions;
+    \item statistical summary;
+    \item exact commit.
+\end{itemize}
+
+\section{Thread Safety}
+
+heapx does not provide internal synchronization.
+Distinct heaps may be used independently by one thread at a time, but concurrent mutation requires external synchronization.
+The internal heap id counter is process-local and not atomic.
+
+\section{Linear contains}
+
+\texttt{heapx\_contains()} is a linear pointer-identity search in all current backends.
+It is useful in tests and diagnostics, but callers should not treat it as a fast membership query.
+
+\section{API Scope}
+
+The API is intentionally small and heap-shaped.
+It does not currently expose:
+
+\begin{itemize}
+    \item meld;
+    \item increase-key;
+    \item custom allocators;
+    \item item destructors;
+    \item stable ordering among equal priorities;
+    \item iteration over heap contents.
+\end{itemize}
+
+These omissions are not accidental.
+They keep the project focused on the operations needed to compare the current heap backends.
+
+\section{Allocation Policy}
+
+The library uses standard C allocation functions internally.
+This is acceptable for the current project, but some production environments require custom allocation hooks.
+Adding such hooks would require careful API design because all backends and node pools would need to follow the same allocation policy.
+
+\section{Amortized Bounds and Allocation Failures}
+
+The documented amortized bounds describe normal successful-operation paths.
+When temporary allocation fails during consolidation, pointer-heavy backends preserve correctness through fallback behavior.
+This may weaken the ideal structural state for that operation.
+
+This is a reasonable engineering choice, but it should remain documented because it separates logical correctness from ideal amortized restructuring.
